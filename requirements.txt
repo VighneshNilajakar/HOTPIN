@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+websockets
+vosk
+pyttsx3
+groq
+httpx
+pydantic
