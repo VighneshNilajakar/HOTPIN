@@ -7,14 +7,31 @@
 #include "config.h"
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "driver/gpio.h"
 
 static const char *TAG = TAG_CAMERA;
 static bool is_initialized = false;
+static bool gpio_isr_installed = false;  // FIX: Track GPIO ISR service state
 
 esp_err_t camera_controller_init(void) {
     ESP_LOGI(TAG, "Initializing camera...");
     
-    // TODO: Implement full camera initialization
+    // FIX: Install GPIO ISR service only once
+    if (!gpio_isr_installed) {
+        esp_err_t isr_ret = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED);
+        if (isr_ret == ESP_OK) {
+            gpio_isr_installed = true;
+            ESP_LOGI(TAG, "GPIO ISR service installed");
+        } else if (isr_ret == ESP_ERR_INVALID_STATE) {
+            // Already installed by another module - this is OK
+            gpio_isr_installed = true;
+            ESP_LOGW(TAG, "GPIO ISR service already installed (OK)");
+        } else {
+            ESP_LOGE(TAG, "Failed to install GPIO ISR service: %s", esp_err_to_name(isr_ret));
+            return isr_ret;
+        }
+    }
+    
     // Camera configuration with AI-Thinker pin mapping
     camera_config_t camera_config = {
         .pin_pwdn = CONFIG_CAMERA_PIN_PWDN,

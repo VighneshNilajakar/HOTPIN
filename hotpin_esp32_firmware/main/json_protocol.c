@@ -7,6 +7,7 @@
 #include "config.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_mac.h"
 #include "esp_timer.h"
 #include <stdio.h>
 #include <string.h>

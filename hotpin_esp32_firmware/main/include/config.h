@@ -45,19 +45,19 @@
 #define CONFIG_STATUS_LED_GPIO              GPIO_NUM_33     // System status indicator (Camera D7)
 
 // ========== I2S Audio Pins (Shared Clock Configuration) ==========
-// Based on user's actual wiring:
+// CRITICAL FIX: Moved I2S RX data from GPIO2 to GPIO12 to avoid camera D0 conflict
 // GPIO14 → INMP441 SCK and MAX98357A BCLK (shared)
 // GPIO15 → INMP441 WS and MAX98357A LRC (shared)
-// GPIO2  → INMP441 SD (mic data input)
+// GPIO12 → INMP441 SD (mic data input) - CHANGED FROM GPIO2
 // GPIO13 → MAX98357A DIN (speaker data output)
 #define CONFIG_I2S_BCLK                     GPIO_NUM_14     // Bit clock (shared TX/RX)
 #define CONFIG_I2S_LRCK                     GPIO_NUM_15     // Word select (shared TX/RX)
 #define CONFIG_I2S_TX_DATA_OUT              GPIO_NUM_13     // MAX98357A speaker DIN
-#define CONFIG_I2S_RX_DATA_IN               GPIO_NUM_2      // INMP441 mic SD
+#define CONFIG_I2S_RX_DATA_IN               GPIO_NUM_12     // INMP441 mic SD (CHANGED!)
 
 // ========== Camera Pins (AI-Thinker Standard) ==========
 #define CONFIG_CAMERA_PIN_PWDN              GPIO_NUM_32     // Power down
-#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_12     // Reset (freed from SD)
+#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_NC     // Reset (not used - GPIO12 now for I2S)
 #define CONFIG_CAMERA_PIN_XCLK              GPIO_NUM_0      // 20MHz clock
 #define CONFIG_CAMERA_PIN_SIOD              GPIO_NUM_26     // I2C data (SCCB)
 #define CONFIG_CAMERA_PIN_SIOC              GPIO_NUM_27     // I2C clock (SCCB)
@@ -136,44 +136,38 @@
 #define CONFIG_BUTTON_DOUBLE_CLICK_MAX_MS   250             // Double-click window
 
 /*******************************************************************************
- * WEBSOCKET CONFIGURATION
+ * NETWORK CONFIGURATION (Using Kconfig - run 'idf.py menuconfig' to change)
  ******************************************************************************/
 
-#define CONFIG_WEBSOCKET_URI                "ws://192.168.1.100:8000/ws"
-#define CONFIG_WEBSOCKET_SESSION_ID         "esp32-cam-hotpin-001"
+// Build WebSocket URI from Kconfig variables
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
+// These are now configured via menuconfig (see main/Kconfig.projbuild)
+// To change: Run 'idf.py menuconfig' -> "HotPin Network Configuration"
+#define CONFIG_WEBSOCKET_URI                "ws://" CONFIG_HOTPIN_SERVER_IP ":" TOSTRING(CONFIG_HOTPIN_SERVER_PORT) "/ws"
+#define CONFIG_WEBSOCKET_SESSION_ID         CONFIG_HOTPIN_SESSION_ID
 #define CONFIG_WEBSOCKET_RECONNECT_DELAY_MS 5000
 #define CONFIG_WEBSOCKET_TIMEOUT_MS         30000
-#define CONFIG_AUTH_BEARER_TOKEN            "your_api_token_here"  // API authentication token
+#define CONFIG_AUTH_BEARER_TOKEN            CONFIG_HOTPIN_AUTH_TOKEN
 
 /*******************************************************************************
- * WIFI CONFIGURATION
+ * WIFI CONFIGURATION (Using Kconfig)
  ******************************************************************************/
 
-#define CONFIG_WIFI_SSID                    "YourWiFiSSID"
-#define CONFIG_WIFI_PASSWORD                "YourPassword"
+#define CONFIG_WIFI_SSID                    CONFIG_HOTPIN_WIFI_SSID
+#define CONFIG_WIFI_PASSWORD                CONFIG_HOTPIN_WIFI_PASSWORD
 #define CONFIG_WIFI_MAXIMUM_RETRY           5
 #define CONFIG_WIFI_CONN_TIMEOUT_MS         10000
 
 /*******************************************************************************
- * HTTP SERVER CONFIGURATION
+ * HTTP SERVER CONFIGURATION (Using Kconfig)
  ******************************************************************************/
 
-#define CONFIG_HTTP_SERVER_URL              "http://192.168.1.100:8000"  // Base HTTP URL
+// Automatically uses same IP as WebSocket
+#define CONFIG_HTTP_SERVER_URL              "http://" CONFIG_HOTPIN_SERVER_IP ":" TOSTRING(CONFIG_HOTPIN_SERVER_PORT)
 #define CONFIG_HTTP_IMAGE_ENDPOINT          "/image"                      // Image upload endpoint
 #define CONFIG_HTTP_TIMEOUT_MS              30000                         // HTTP request timeout
-
-/*******************************************************************************
- * SYSTEM STATE DEFINITIONS
- ******************************************************************************/
-
-typedef enum {
-    SYSTEM_STATE_INIT,              // Initial boot state
-    SYSTEM_STATE_CAMERA_STANDBY,    // Camera streaming mode
-    SYSTEM_STATE_VOICE_ACTIVE,      // Voice interaction mode (STT/TTS)
-    SYSTEM_STATE_TRANSITIONING,     // Mid-transition (driver switching)
-    SYSTEM_STATE_ERROR,             // Error recovery state
-    SYSTEM_STATE_SHUTDOWN           // Graceful shutdown
-} system_state_t;
 
 /*******************************************************************************
  * MEMORY ALLOCATION HELPERS

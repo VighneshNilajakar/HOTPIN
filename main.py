@@ -17,9 +17,11 @@ import os
 import io
 import json
 import asyncio
+import socket
+import subprocess
 from typing import Dict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
@@ -53,6 +55,55 @@ SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", 8000))
 
 
+def get_network_info():
+    """
+    Get current network information (WiFi SSID and IP address).
+    Returns dict with 'wifi_name', 'ip_address', 'interface'
+    """
+    network_info = {
+        'wifi_name': 'Unknown',
+        'ip_address': 'Unknown',
+        'interface': 'Unknown'
+    }
+    
+    try:
+        # Get WiFi SSID (Windows)
+        if os.name == 'nt':  # Windows
+            try:
+                result = subprocess.run(
+                    ['netsh', 'wlan', 'show', 'interfaces'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'SSID' in line and 'BSSID' not in line:
+                            network_info['wifi_name'] = line.split(':', 1)[1].strip()
+                            network_info['interface'] = 'WiFi'
+                            break
+            except Exception as e:
+                print(f"⚠ Could not get WiFi SSID: {e}")
+        
+        # Get local IP address
+        try:
+            # Create a socket to determine the local IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            # Connect to a public DNS server (doesn't actually send data)
+            s.connect(("8.8.8.8", 80))
+            network_info['ip_address'] = s.getsockname()[0]
+            s.close()
+        except Exception:
+            # Fallback method
+            network_info['ip_address'] = socket.gethostbyname(socket.gethostname())
+    
+    except Exception as e:
+        print(f"⚠ Error getting network info: {e}")
+    
+    return network_info
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -63,6 +114,16 @@ async def lifespan(app: FastAPI):
     print("\n" + "="*60)
     print("🚀 Hotpin Prototype Server Starting...")
     print("="*60)
+    
+    # Display network information
+    network_info = get_network_info()
+    print(f"\n📡 Network Information:")
+    print(f"   WiFi Network: {network_info['wifi_name']}")
+    print(f"   IP Address: {network_info['ip_address']}")
+    print(f"   Interface: {network_info['interface']}")
+    print(f"   Server URL: http://{network_info['ip_address']}:{SERVER_PORT}")
+    print(f"   WebSocket URL: ws://{network_info['ip_address']}:{SERVER_PORT}/ws")
+    print()
     
     # Initialize Groq LLM client
     try:
@@ -160,6 +221,67 @@ async def list_voices():
         "voices": voices,
         "count": len(voices)
     })
+
+
+@app.post("/image")
+async def upload_image(
+    session: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """
+    Upload image from ESP32-CAM.
+    
+    Parameters:
+    - session: Session ID (e.g., "esp32-cam-hotpin-001")
+    - file: JPEG image file (multipart/form-data)
+    
+    Returns:
+    - JSON response with success status and image metadata
+    """
+    try:
+        # Read image data
+        image_data = await file.read()
+        image_size = len(image_data)
+        
+        print(f"📷 [{session}] Image received: {file.filename}, {image_size} bytes ({image_size/1024:.2f} KB)")
+        
+        # Optional: Save image to disk
+        import os
+        from datetime import datetime
+        
+        # Create images directory if it doesn't exist
+        os.makedirs("captured_images", exist_ok=True)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = f"captured_images/{session}_{timestamp}.jpg"
+        
+        with open(save_path, "wb") as f:
+            f.write(image_data)
+        
+        print(f"💾 [{session}] Image saved: {save_path}")
+        
+        # TODO: Add image processing here (e.g., object detection, OCR, etc.)
+        # For now, just acknowledge receipt
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Image received successfully",
+            "session": session,
+            "filename": file.filename,
+            "size_bytes": image_size,
+            "saved_path": save_path
+        })
+    
+    except Exception as e:
+        print(f"✗ [{session}] Image upload error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"Failed to process image: {str(e)}"
+            }
+        )
 
 
 @app.websocket("/ws")

@@ -12,6 +12,7 @@
 #include "tts_decoder.h"
 #include "config.h"
 #include "audio_driver.h"
+#include "websocket_client.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"

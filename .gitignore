@@ -55,3 +55,11 @@ Thumbs.db
 test_audio/
 *.pcm
 *.wav
+
+# ESP32 Firmware
+hotpin_esp32_firmware/build/
+hotpin_esp32_firmware/sdkconfig
+hotpin_esp32_firmware/sdkconfig.old
+hotpin_esp32_firmware/.env
+hotpin_esp32_firmware/dependencies.lock
+hotpin_esp32_firmware/managed_components/

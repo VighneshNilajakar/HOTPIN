@@ -83,6 +83,20 @@ esp_err_t audio_driver_deinit(void) {
     esp_err_t ret_tx = ESP_OK;
     esp_err_t ret_rx = ESP_OK;
     
+    // FIX: Stop I2S operations before uninstalling
+    if (tx_enabled) {
+        i2s_stop(CONFIG_I2S_NUM_TX);
+        ESP_LOGI(TAG, "I2S TX stopped");
+    }
+    
+    if (rx_enabled) {
+        i2s_stop(CONFIG_I2S_NUM_RX);
+        ESP_LOGI(TAG, "I2S RX stopped");
+    }
+    
+    // FIX: Add delay to ensure DMA operations complete
+    vTaskDelay(pdMS_TO_TICKS(50));
+    
     // Uninstall I2S drivers
     if (tx_enabled) {
         ret_tx = i2s_driver_uninstall(CONFIG_I2S_NUM_TX);
@@ -103,6 +117,9 @@ esp_err_t audio_driver_deinit(void) {
         }
         rx_enabled = false;
     }
+    
+    // FIX: Additional delay to free interrupt resources before camera init
+    vTaskDelay(pdMS_TO_TICKS(50));
     
     is_initialized = false;
     ESP_LOGI(TAG, "Audio driver deinitialized");
@@ -222,7 +239,7 @@ static esp_err_t configure_i2s_tx(void) {
         .bits_per_sample = CONFIG_AUDIO_BITS_PER_SAMPLE,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Mono output
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt priority
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED,  // FIX: Shared interrupt to prevent exhaustion
         .dma_buf_count = CONFIG_I2S_DMA_BUF_COUNT,
         .dma_buf_len = CONFIG_I2S_DMA_BUF_LEN,
         .use_apll = false,                             // Use PLL, not APLL
@@ -239,6 +256,7 @@ static esp_err_t configure_i2s_tx(void) {
     
     // I2S TX pin configuration
     i2s_pin_config_t i2s_tx_pins = {
+        .mck_io_num = I2S_PIN_NO_CHANGE,            // FIX: Disable MCLK to prevent pin conflict
         .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared)
         .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared)
         .data_out_num = CONFIG_I2S_TX_DATA_OUT,     // Data output to speaker
@@ -248,6 +266,8 @@ static esp_err_t configure_i2s_tx(void) {
     ret = i2s_set_pin(CONFIG_I2S_NUM_TX, &i2s_tx_pins);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set I2S TX pins: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "TX Pin config: BCLK=%d, WS=%d, DOUT=%d, MCLK=DISABLED", 
+                 CONFIG_I2S_BCLK, CONFIG_I2S_LRCK, CONFIG_I2S_TX_DATA_OUT);
         i2s_driver_uninstall(CONFIG_I2S_NUM_TX);
         return ret;
     }
@@ -271,7 +291,7 @@ static esp_err_t configure_i2s_rx(void) {
         .bits_per_sample = CONFIG_AUDIO_BITS_PER_SAMPLE,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Mono input
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt priority
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED,  // FIX: Shared interrupt to prevent exhaustion
         .dma_buf_count = CONFIG_I2S_DMA_BUF_COUNT,
         .dma_buf_len = CONFIG_I2S_DMA_BUF_LEN,
         .use_apll = false,                             // Use PLL, not APLL
@@ -288,6 +308,7 @@ static esp_err_t configure_i2s_rx(void) {
     
     // I2S RX pin configuration (shared BCLK and WS with TX)
     i2s_pin_config_t i2s_rx_pins = {
+        .mck_io_num = I2S_PIN_NO_CHANGE,            // FIX: Disable MCLK to prevent pin conflict
         .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared with TX)
         .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared with TX)
         .data_out_num = I2S_PIN_NO_CHANGE,          // No output on RX
@@ -297,6 +318,8 @@ static esp_err_t configure_i2s_rx(void) {
     ret = i2s_set_pin(CONFIG_I2S_NUM_RX, &i2s_rx_pins);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set I2S RX pins: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "RX Pin config: BCLK=%d, WS=%d, DIN=%d, MCLK=DISABLED", 
+                 CONFIG_I2S_BCLK, CONFIG_I2S_LRCK, CONFIG_I2S_RX_DATA_IN);
         i2s_driver_uninstall(CONFIG_I2S_NUM_RX);
         return ret;
     }

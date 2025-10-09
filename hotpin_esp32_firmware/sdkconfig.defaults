@@ -82,6 +82,13 @@ CONFIG_WS_BUFFER_SIZE=8192
 CONFIG_WS_TRANSPORT_MAX_MESSAGE_SIZE=8192
 
 # ===========================
+# Partition Table
+# ===========================
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# ===========================
 # Compiler Optimizations
 # ===========================
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

@@ -1,0 +1,45 @@
+menu "HotPin Network Configuration"
+
+    config HOTPIN_SERVER_IP
+        string "Server IP Address"
+        default "172.24.158.58"
+        help
+            IP address of the Python WebSocket/HTTP server.
+            This should be the IP where your main.py server is running.
+            Example: 10.240.253.58 or 192.168.1.100
+
+    config HOTPIN_SERVER_PORT
+        int "Server Port"
+        default 8000
+        range 1 65535
+        help
+            Port number where the server is listening.
+            Default is 8000 for the Python WebSocket/HTTP server.
+
+    config HOTPIN_WIFI_SSID
+        string "WiFi SSID"
+        default "wifi"
+        help
+            SSID (network name) for the WiFi network.
+
+    config HOTPIN_WIFI_PASSWORD
+        string "WiFi Password"
+        default "123456780"
+        help
+            Password for the WiFi network.
+
+    config HOTPIN_SESSION_ID
+        string "WebSocket Session ID"
+        default "esp32-cam-hotpin"
+        help
+            Unique session identifier for WebSocket connection.
+            This helps the server identify different ESP32-CAM devices.
+
+    config HOTPIN_AUTH_TOKEN
+        string "API Authentication Token"
+        default "your_api_token_here"
+        help
+            Bearer token for API authentication (if required by server).
+            Leave as default if server doesn't require authentication.
+
+endmenu

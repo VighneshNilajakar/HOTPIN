@@ -299,7 +299,7 @@ static esp_err_t handle_camera_capture(void) {
     // Step 3: Stop and deinit I2S drivers if voice mode is active
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
         ESP_LOGI(TAG, "Stopping I2S drivers...");
-        audio_driver_stop();
+        // audio_driver_deinit() will stop the driver
         vTaskDelay(pdMS_TO_TICKS(50));
         ret = audio_driver_deinit();
         if (ret != ESP_OK) {
@@ -369,12 +369,7 @@ restore_audio:
             return ESP_FAIL;
         }
         
-        ret = audio_driver_start();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to start audio: %s", esp_err_to_name(ret));
-            xSemaphoreGive(g_i2s_config_mutex);
-            return ESP_FAIL;
-        }
+        // audio_driver_init() already starts the driver
         
         // Restart STT and TTS pipelines
         stt_pipeline_start();
@@ -414,6 +409,10 @@ static esp_err_t transition_to_voice_mode(void) {
         xSemaphoreGive(g_i2s_config_mutex);
         return ret;
     }
+    
+    // FIX: Add delay to allow camera interrupt resources to be fully released
+    ESP_LOGI(TAG, "Waiting for camera resources to be released...");
+    vTaskDelay(pdMS_TO_TICKS(100));
     
     // Step 4: Initialize audio drivers (I2S0 TX, I2S1 RX)
     ESP_LOGI(TAG, "Initializing audio drivers...");

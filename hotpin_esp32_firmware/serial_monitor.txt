@@ -1,0 +1,38 @@
+📢 Voice mode STARTED (recording...)
+[0;32mI (46543) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY[0m
+[0;32mI (46543) SERIAL_CMD: Simulated SHORT PRESS - Voice START[0m
+[0;32mI (46544) STATE_MGR: Single click - mode toggle requested[0m
+[0;32mI (46555) STATE_MGR: Switching: Camera → Voice (count: 1)[0m
+[0;32mI (46561) STATE_MGR: === TRANSITION TO VOICE MODE ===[0m
+[0;32mI (46567) STATE_MGR: Stopping camera...[0m
+[0;32mI (46571) STATE_MGR: Acquiring I2S mutex...[0m
+[0;32mI (46576) STATE_MGR: Deinitializing camera...[0m
+[0;32mI (46581) CAMERA: Deinitializing camera...[0m
+[0;32mI (46587) CAMERA: Camera deinitialized[0m
+[0;32mI (46590) STATE_MGR: Waiting for camera resources to be released...[0m
+[0;32mI (46697) STATE_MGR: Initializing audio drivers...[0m
+[0;32mI (46697) AUDIO: Initializing dual I2S audio drivers...[0m
+[0;32mI (46698) AUDIO: Configuring I2S0 TX for MAX98357A...[0m
+[0;32mI (46705) AUDIO: I2S TX configured: 16000 Hz, 16-bit, mono[0m
+[0;32mI (46709) AUDIO: Configuring I2S1 RX for INMP441...[0m
+[0;32mI (46716) AUDIO: I2S RX configured: 16000 Hz, 16-bit, mono[0m
+[0;32mI (46721) AUDIO: ✅ Audio driver initialized successfully[0m
+[0;32mI (46727) AUDIO:    TX: I2S0 (MAX98357A) on GPIO13[0m
+[0;32mI (46733) AUDIO:    RX: I2S1 (INMP441) on GPIO12[0m
+[0;32mI (46738) AUDIO:    Shared BCLK: GPIO14, WS: GPIO15[0m
+[0;32mI (46744) STATE_MGR: I2S mutex released[0m
+[0;32mI (46748) STATE_MGR: Starting STT/TTS pipelines...[0m
+[0;32mI (46754) STT: Starting STT pipeline...[0m
+[0;31mE (46758) STT: STT pipeline not initialized[0m
+[0;31mE (46763) STATE_MGR: Failed to start STT pipeline: ESP_ERR_INVALID_STATE[0m
+[0;32mI (46770) TTS: Starting TTS decoder...[0m
+[0;31mE (46775) TTS: TTS decoder not initialized[0m
+[0;31mE (46780) STATE_MGR: Failed to start TTS decoder: ESP_ERR_INVALID_STATE[0m
+[0;32mI (46787) STATE_MGR: ✅ Voice mode transition complete[0m
+[0;32mI (46793) STATE_MGR: ✅ Entered VOICE_ACTIVE state[0m
+🔇 Voice mode STOPPED
+[0;32mI (50775) STATE_MGR: Button event received: 1 in state VOICE_ACTIVE[0m
+[0;32mI (50775) SERIAL_CMD: Simulated SHORT PRESS - Voice STOP[0m
+[0;32mI (50775) STATE_MGR: Single click - mode toggle requested[0m
+[0;32mI (50785) STATE_MGR: Switching: Voice → Camera (count: 2)[0m
+[0;32mI (50791) STATE_MGR: === TRANSITION TO CAMERA MODE ===[0m
