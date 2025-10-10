@@ -28,6 +28,7 @@ static uint8_t *g_audio_ring_buffer = NULL;
 static size_t g_ring_buffer_size = CONFIG_STT_RING_BUFFER_SIZE;
 static size_t g_ring_buffer_write_pos = 0;
 static size_t g_ring_buffer_read_pos = 0;
+static size_t g_ring_buffer_count = 0;
 static SemaphoreHandle_t g_ring_buffer_mutex = NULL;
 
 // Task handles
@@ -51,8 +52,8 @@ static void audio_capture_task(void *pvParameters);
 static void audio_streaming_task(void *pvParameters);
 static size_t ring_buffer_available_space(void);
 static size_t ring_buffer_available_data(void);
-static esp_err_t ring_buffer_write(const uint8_t *data, size_t len);
-static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read);
+static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) __attribute__((noinline));
+static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read) __attribute__((noinline));
 
 // ===========================
 // Public Functions
@@ -106,6 +107,7 @@ esp_err_t stt_pipeline_init(void) {
     }
     g_ring_buffer_write_pos = 0;
     g_ring_buffer_read_pos = 0;
+    g_ring_buffer_count = 0;
     
     // Create ring buffer mutex
     g_ring_buffer_mutex = xSemaphoreCreateMutex();
@@ -174,6 +176,7 @@ esp_err_t stt_pipeline_start(void) {
     xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
     g_ring_buffer_write_pos = 0;
     g_ring_buffer_read_pos = 0;
+    g_ring_buffer_count = 0;
     xSemaphoreGive(g_ring_buffer_mutex);
     
     // CRITICAL FIX: Pin audio capture task to Core 0 (same as Wi-Fi) to resolve hardware bus contention
@@ -392,12 +395,17 @@ static void audio_capture_task(void *pvParameters) {
 static void audio_streaming_task(void *pvParameters) {
     ESP_LOGI(TAG, "Audio streaming task started on Core %d", xPortGetCoreID());
     
-    uint8_t *stream_buffer = heap_caps_malloc(AUDIO_STREAM_CHUNK_SIZE, MALLOC_CAP_INTERNAL);
+    uint8_t *stream_buffer = heap_caps_malloc(
+        AUDIO_STREAM_CHUNK_SIZE,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
     if (stream_buffer == NULL) {
         ESP_LOGE(TAG, "Failed to allocate stream buffer");
         vTaskDelete(NULL);
         return;
     }
+
+    ESP_LOGI(TAG, "  ✓ Stream buffer allocated at %p", stream_buffer);
     
     size_t bytes_read = 0;
     uint32_t total_bytes_streamed = 0;
@@ -454,29 +462,25 @@ static void audio_streaming_task(void *pvParameters) {
 
 // Ring buffer helper functions
 static size_t ring_buffer_available_space(void) {
+    if (g_ring_buffer_mutex == NULL) {
+        return g_ring_buffer_size - g_ring_buffer_count;
+    }
+
     size_t space;
     xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
-    
-    if (g_ring_buffer_write_pos >= g_ring_buffer_read_pos) {
-        space = g_ring_buffer_size - (g_ring_buffer_write_pos - g_ring_buffer_read_pos);
-    } else {
-        space = g_ring_buffer_read_pos - g_ring_buffer_write_pos;
-    }
-    
+    space = g_ring_buffer_size - g_ring_buffer_count;
     xSemaphoreGive(g_ring_buffer_mutex);
     return space;
 }
 
 static size_t ring_buffer_available_data(void) {
+    if (g_ring_buffer_mutex == NULL) {
+        return g_ring_buffer_count;
+    }
+
     size_t data;
     xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
-    
-    if (g_ring_buffer_write_pos >= g_ring_buffer_read_pos) {
-        data = g_ring_buffer_write_pos - g_ring_buffer_read_pos;
-    } else {
-        data = g_ring_buffer_size - (g_ring_buffer_read_pos - g_ring_buffer_write_pos);
-    }
-    
+    data = g_ring_buffer_count;
     xSemaphoreGive(g_ring_buffer_mutex);
     return data;
 }
@@ -486,30 +490,34 @@ static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) {
     if (data == NULL || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    
-    if (ring_buffer_available_space() < len) {
-        return ESP_ERR_NO_MEM;  // Buffer full
+
+    if (len > g_ring_buffer_size) {
+        return ESP_ERR_INVALID_SIZE;
     }
-    
+
     if (!xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(100))) {
         ESP_LOGW(TAG, "⚠ Ring buffer mutex timeout");
         return ESP_ERR_TIMEOUT;
     }
-    
-    // Safe byte-by-byte copy with bounds checking
-    for (size_t i = 0; i < len; i++) {
-        // Double-check we're within bounds (paranoid safety)
-        if (g_ring_buffer_write_pos >= g_ring_buffer_size) {
-            ESP_LOGE(TAG, "❌ Ring buffer write pos overflow: %zu >= %zu", 
-                     g_ring_buffer_write_pos, g_ring_buffer_size);
-            xSemaphoreGive(g_ring_buffer_mutex);
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        g_audio_ring_buffer[g_ring_buffer_write_pos] = data[i];
-        g_ring_buffer_write_pos = (g_ring_buffer_write_pos + 1) % g_ring_buffer_size;
+
+    size_t available = g_ring_buffer_size - g_ring_buffer_count;
+    if (available < len) {
+        xSemaphoreGive(g_ring_buffer_mutex);
+        return ESP_ERR_NO_MEM;
     }
-    
+
+    size_t write_pos = g_ring_buffer_write_pos;
+    for (size_t i = 0; i < len; i++) {
+        if (write_pos >= g_ring_buffer_size) {
+            write_pos = 0;
+        }
+        g_audio_ring_buffer[write_pos] = data[i];
+        write_pos++;
+    }
+
+    g_ring_buffer_write_pos = (write_pos % g_ring_buffer_size);
+    g_ring_buffer_count += len;
+
     xSemaphoreGive(g_ring_buffer_mutex);
     return ESP_OK;
 }
@@ -519,36 +527,34 @@ static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read)
     if (data == NULL || bytes_read == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    
-    size_t available = ring_buffer_available_data();
-    size_t to_read = (len < available) ? len : available;
-    
-    if (to_read == 0) {
-        *bytes_read = 0;
-        return ESP_OK;
-    }
-    
+
     if (!xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(100))) {
         ESP_LOGW(TAG, "⚠ Ring buffer mutex timeout (read)");
         *bytes_read = 0;
         return ESP_ERR_TIMEOUT;
     }
-    
-    // Safe byte-by-byte copy with bounds checking
-    for (size_t i = 0; i < to_read; i++) {
-        // Double-check we're within bounds (paranoid safety)
-        if (g_ring_buffer_read_pos >= g_ring_buffer_size) {
-            ESP_LOGE(TAG, "❌ Ring buffer read pos overflow: %zu >= %zu", 
-                     g_ring_buffer_read_pos, g_ring_buffer_size);
-            xSemaphoreGive(g_ring_buffer_mutex);
-            *bytes_read = i;  // Return what we managed to read
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        data[i] = g_audio_ring_buffer[g_ring_buffer_read_pos];
-        g_ring_buffer_read_pos = (g_ring_buffer_read_pos + 1) % g_ring_buffer_size;
+
+    size_t available = g_ring_buffer_count;
+    if (available == 0) {
+        xSemaphoreGive(g_ring_buffer_mutex);
+        *bytes_read = 0;
+        return ESP_OK;
     }
-    
+
+    size_t to_read = (len < available) ? len : available;
+
+    size_t read_pos = g_ring_buffer_read_pos;
+    for (size_t i = 0; i < to_read; i++) {
+        if (read_pos >= g_ring_buffer_size) {
+            read_pos = 0;
+        }
+        data[i] = g_audio_ring_buffer[read_pos];
+        read_pos++;
+    }
+
+    g_ring_buffer_read_pos = (read_pos % g_ring_buffer_size);
+    g_ring_buffer_count -= to_read;
+
     xSemaphoreGive(g_ring_buffer_mutex);
     
     *bytes_read = to_read;
