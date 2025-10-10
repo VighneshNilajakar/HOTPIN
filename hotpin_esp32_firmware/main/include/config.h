@@ -88,8 +88,10 @@
 #define CONFIG_AUDIO_CHANNELS               1               // Mono
 
 // I2S DMA buffer configuration
-#define CONFIG_I2S_DMA_BUF_COUNT            8               // Number of DMA buffers
-#define CONFIG_I2S_DMA_BUF_LEN              1024            // Samples per buffer (32ms @ 16kHz)
+// FINAL FIX: Optimized to reduce DMA-capable RAM pressure while maintaining throughput
+// Strategy: Fewer descriptors (less metadata overhead) + Larger buffers (maintain performance)
+#define CONFIG_I2S_DMA_BUF_COUNT            4               // Number of DMA descriptors (was 16, reduced to 4 to lower memory pressure)
+#define CONFIG_I2S_DMA_BUF_LEN              1200            // Samples per buffer (was 512, increased to 1200 for sustained throughput)
 
 // I2S controller assignment
 #define CONFIG_I2S_NUM_TX                   I2S_NUM_0       // Speaker output
