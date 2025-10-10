@@ -1,14 +1,18 @@
 /**
  * @file audio_driver.h
- * @brief Dual I2S audio driver manager
+ * @brief Modern I2S STD audio driver manager (Full-Duplex)
  * 
- * Manages I2S0 (TX/speaker) and I2S1 (RX/microphone) with shared clock
+ * Uses the modern i2s_std driver (driver/i2s_std.h) for robust full-duplex operation.
+ * Manages separate TX (speaker) and RX (microphone) channels with shared clock.
+ * 
+ * MIGRATION NOTE: This replaces the deprecated legacy I2S driver to fix LoadStoreError crashes.
  */
 
 #ifndef AUDIO_DRIVER_H
 #define AUDIO_DRIVER_H
 
 #include "esp_err.h"
+#include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <stdint.h>
@@ -19,10 +23,19 @@
  * @brief Global mutex for protecting concurrent I2S read/write operations
  * 
  * CRITICAL: This mutex prevents race conditions when stt_pipeline_task (Core 1)
- * and tts_playback_task (Core 1) concurrently access the I2S0 hardware peripheral.
- * Must be acquired before any i2s_read() or i2s_write() call.
+ * and tts_playback_task (Core 1) concurrently access the I2S hardware channels.
+ * Must be acquired before any i2s_channel_read() or i2s_channel_write() call.
  */
 extern SemaphoreHandle_t g_i2s_access_mutex;
+
+/**
+ * @brief I2S channel handles for modern i2s_std driver
+ * 
+ * The modern driver uses separate channel handles for TX and RX,
+ * allowing for cleaner full-duplex operation.
+ */
+extern i2s_chan_handle_t g_i2s_tx_handle;  // Speaker output channel
+extern i2s_chan_handle_t g_i2s_rx_handle;  // Microphone input channel
 
 /**
  * @brief Initialize dual I2S drivers
