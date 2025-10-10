@@ -9,9 +9,20 @@
 #define AUDIO_DRIVER_H
 
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+
+/**
+ * @brief Global mutex for protecting concurrent I2S read/write operations
+ * 
+ * CRITICAL: This mutex prevents race conditions when stt_pipeline_task (Core 1)
+ * and tts_playback_task (Core 1) concurrently access the I2S0 hardware peripheral.
+ * Must be acquired before any i2s_read() or i2s_write() call.
+ */
+extern SemaphoreHandle_t g_i2s_access_mutex;
 
 /**
  * @brief Initialize dual I2S drivers

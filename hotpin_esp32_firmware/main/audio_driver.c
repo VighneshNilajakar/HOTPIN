@@ -24,6 +24,14 @@ static bool is_initialized = false;
 // Use single I2S peripheral for full-duplex operation
 #define I2S_AUDIO_NUM    I2S_NUM_0
 
+/**
+ * @brief Global mutex for thread-safe I2S hardware access
+ * 
+ * CRITICAL: Protects concurrent i2s_read() and i2s_write() operations
+ * from corrupting the DMA controller state when called from multiple tasks.
+ */
+SemaphoreHandle_t g_i2s_access_mutex = NULL;
+
 // ===========================
 // Private Function Declarations
 // ===========================
@@ -39,6 +47,18 @@ esp_err_t audio_driver_init(void) {
     if (is_initialized) {
         ESP_LOGW(TAG, "Audio driver already initialized");
         return ESP_OK;
+    }
+    
+    // CRITICAL: Create I2S access mutex (only once)
+    if (g_i2s_access_mutex == NULL) {
+        ESP_LOGI(TAG, "[MUTEX] Creating I2S access mutex for thread safety...");
+        g_i2s_access_mutex = xSemaphoreCreateMutex();
+        if (g_i2s_access_mutex == NULL) {
+            ESP_LOGE(TAG, "❌ CRITICAL: Failed to create I2S access mutex");
+            ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(TAG, "  ✓ I2S access mutex created successfully");
     }
     
     // Configure single I2S peripheral for both TX and RX
@@ -129,10 +149,28 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
         return ESP_ERR_INVALID_ARG;
     }
     
+    // CRITICAL: Acquire mutex to prevent concurrent I2S access
+    if (g_i2s_access_mutex == NULL) {
+        ESP_LOGE(TAG, "❌ I2S access mutex not initialized");
+        if (bytes_written) *bytes_written = 0;
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    // Try to acquire mutex with timeout to prevent indefinite blocking
+    if (xSemaphoreTake(g_i2s_access_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "⚠ Failed to acquire I2S access mutex within 100ms (write blocked)");
+        if (bytes_written) *bytes_written = 0;
+        return ESP_ERR_TIMEOUT;
+    }
+    
+    // Perform I2S write operation (protected by mutex)
     size_t written = 0;
     TickType_t ticks_to_wait = timeout_ms / portTICK_PERIOD_MS;
     
     esp_err_t ret = i2s_write(I2S_AUDIO_NUM, data, size, &written, ticks_to_wait);
+    
+    // Release mutex immediately after hardware access
+    xSemaphoreGive(g_i2s_access_mutex);
     
     if (bytes_written) {
         *bytes_written = written;
@@ -163,10 +201,28 @@ esp_err_t audio_driver_read(uint8_t *buffer, size_t size, size_t *bytes_read, ui
         return ESP_ERR_INVALID_ARG;
     }
     
+    // CRITICAL: Acquire mutex to prevent concurrent I2S access
+    if (g_i2s_access_mutex == NULL) {
+        ESP_LOGE(TAG, "❌ I2S access mutex not initialized");
+        if (bytes_read) *bytes_read = 0;
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    // Wait indefinitely for mutex (audio capture is critical path)
+    if (xSemaphoreTake(g_i2s_access_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "❌ CRITICAL: Failed to acquire I2S access mutex (should never happen with portMAX_DELAY)");
+        if (bytes_read) *bytes_read = 0;
+        return ESP_ERR_TIMEOUT;
+    }
+    
+    // Perform I2S read operation (protected by mutex)
     size_t read = 0;
     TickType_t ticks_to_wait = timeout_ms / portTICK_PERIOD_MS;
     
     esp_err_t ret = i2s_read(I2S_AUDIO_NUM, buffer, size, &read, ticks_to_wait);
+    
+    // Release mutex immediately after hardware access
+    xSemaphoreGive(g_i2s_access_mutex);
     
     if (bytes_read) {
         *bytes_read = read;
@@ -308,6 +364,7 @@ static esp_err_t configure_i2s_full_duplex(void) {
     vTaskDelay(pdMS_TO_TICKS(50));
     
     // Verify DMA is ready by attempting a test write
+    // NOTE: No mutex needed here - this runs during init before tasks start
     ESP_LOGI(TAG, "  Phase 2: DMA verification");
     uint8_t test_buffer[128] = {0};
     size_t bytes_written = 0;
