@@ -176,7 +176,10 @@ esp_err_t stt_pipeline_start(void) {
     g_ring_buffer_read_pos = 0;
     xSemaphoreGive(g_ring_buffer_mutex);
     
-    // Create audio capture task (Priority 7, Core 1)
+    // CRITICAL FIX: Pin audio capture task to Core 0 (same as Wi-Fi) to resolve hardware bus contention
+    // The LoadStoreError was caused by Wi-Fi (Core 0) and I2S DMA (Core 1) competing for memory bus access
+    // Co-locating them on Core 0 allows FreeRTOS scheduler to coordinate their operations
+    ESP_LOGI(TAG, "[CORE AFFINITY] Creating audio capture task on Core 0 (co-located with Wi-Fi)");
     BaseType_t ret = xTaskCreatePinnedToCore(
         audio_capture_task,
         "stt_capture",
@@ -184,7 +187,7 @@ esp_err_t stt_pipeline_start(void) {
         NULL,
         TASK_PRIORITY_STT_PROCESSING,
         &g_audio_capture_task_handle,
-        TASK_CORE_APP
+        0  // Core 0 - CRITICAL: Must match Wi-Fi core to prevent DMA corruption
     );
     
     if (ret != pdPASS) {
@@ -192,7 +195,7 @@ esp_err_t stt_pipeline_start(void) {
         return ESP_FAIL;
     }
     
-    // Create audio streaming task (Priority 7, Core 1)
+    // Create audio streaming task (Priority 7, Core 0 for consistency)
     ret = xTaskCreatePinnedToCore(
         audio_streaming_task,
         "stt_stream",
@@ -200,7 +203,7 @@ esp_err_t stt_pipeline_start(void) {
         NULL,
         TASK_PRIORITY_STT_PROCESSING,
         &g_audio_streaming_task_handle,
-        TASK_CORE_APP
+        0  // Core 0 - Keep both STT tasks on same core
     );
     
     if (ret != pdPASS) {
@@ -306,6 +309,9 @@ static void audio_capture_task(void *pvParameters) {
     uint32_t error_count = 0;
     int64_t first_read_time = 0;
     
+    // CANARY: Static counter for continuous health monitoring
+    static uint32_t alive_counter = 0;
+    
     ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ 🎤 STARTING AUDIO CAPTURE");
     ESP_LOGI(TAG, "║ Chunk size: %d bytes | Timeout: %d ms", AUDIO_CAPTURE_CHUNK_SIZE, AUDIO_CAPTURE_TIMEOUT_MS);
@@ -346,6 +352,13 @@ static void audio_capture_task(void *pvParameters) {
             ret = ring_buffer_write(capture_buffer, bytes_read);
             if (ret == ESP_OK) {
                 total_bytes_captured += bytes_read;
+                
+                // CANARY: Continuous health monitoring - log every 100 successful reads
+                alive_counter++;
+                if (alive_counter % 100 == 0) {
+                    ESP_LOGI(TAG, "[CAPTURE] ✅ Alive... %u reads completed (Free Heap: %u bytes)", 
+                             (unsigned int)alive_counter, (unsigned int)esp_get_free_heap_size());
+                }
                 
                 // Log every 10th successful read
                 if (read_count % 10 == 0) {
