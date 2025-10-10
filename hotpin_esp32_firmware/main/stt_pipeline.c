@@ -66,17 +66,39 @@ esp_err_t stt_pipeline_init(void) {
         return ESP_OK;
     }
     
-    // Allocate ring buffer in DMA-capable internal RAM for reliability
-    // Note: PSRAM can cause cache coherency issues with DMA operations
-    ESP_LOGI(TAG, "Allocating %zu KB ring buffer in internal RAM...", g_ring_buffer_size / 1024);
-    g_audio_ring_buffer = heap_caps_malloc(g_ring_buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // CRITICAL FIX: Allocate ring buffer in external PSRAM to prevent internal DRAM exhaustion
+    // The ring buffer is for software buffering AFTER DMA transfer, not for DMA operations itself.
+    // Moving this 64KB buffer to PSRAM frees internal DRAM for critical I2S DMA buffers.
+    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ STT Ring Buffer Allocation (PSRAM)");
+    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "[MEMORY] Pre-allocation state:");
+    ESP_LOGI(TAG, "  Free internal RAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    ESP_LOGI(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
+    ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    
+    ESP_LOGI(TAG, "[ALLOCATION] Allocating %zu KB ring buffer in external PSRAM...", g_ring_buffer_size / 1024);
+    g_audio_ring_buffer = heap_caps_malloc(g_ring_buffer_size, MALLOC_CAP_SPIRAM);
     if (g_audio_ring_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate ring buffer in internal RAM");
-        ESP_LOGE(TAG, "  Requested: %zu bytes", g_ring_buffer_size);
-        ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        ESP_LOGE(TAG, "❌ CRITICAL: Failed to allocate ring buffer in PSRAM");
+        ESP_LOGE(TAG, "  Requested: %zu bytes (%zu KB)", g_ring_buffer_size, g_ring_buffer_size / 1024);
+        ESP_LOGE(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        ESP_LOGE(TAG, "  This indicates PSRAM is not available or exhausted");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "  ✓ Ring buffer allocated at %p", g_audio_ring_buffer);
+    ESP_LOGI(TAG, "  ✓ Ring buffer allocated at %p (PSRAM address)", g_audio_ring_buffer);
+    
+    // Verify allocation is actually in PSRAM (address range check)
+    if ((uint32_t)g_audio_ring_buffer >= 0x3F800000 && (uint32_t)g_audio_ring_buffer < 0x3FC00000) {
+        ESP_LOGI(TAG, "  ✓ Confirmed: Buffer is in PSRAM address range (0x3F800000-0x3FC00000)");
+    } else {
+        ESP_LOGW(TAG, "  ⚠ Warning: Buffer address %p may not be in expected PSRAM range", g_audio_ring_buffer);
+    }
+    
+    ESP_LOGI(TAG, "[MEMORY] Post-allocation state:");
+    ESP_LOGI(TAG, "  Free internal RAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    ESP_LOGI(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
+    ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     
     // Zero buffer safely (no memset to avoid cache issues)
     for (size_t i = 0; i < g_ring_buffer_size; i++) {
