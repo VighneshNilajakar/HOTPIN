@@ -45,19 +45,20 @@
 #define CONFIG_STATUS_LED_GPIO              GPIO_NUM_33     // System status indicator (Camera D7)
 
 // ========== I2S Audio Pins (Shared Clock Configuration) ==========
-// CRITICAL FIX: Moved I2S RX data from GPIO2 to GPIO12 to avoid camera D0 conflict
+// CRITICAL FIX: GPIO12 is a strapping pin (MTDI) and cannot be used for I2S
+// Using GPIO2 for I2S RX data input to avoid hardware conflicts
 // GPIO14 → INMP441 SCK and MAX98357A BCLK (shared)
 // GPIO15 → INMP441 WS and MAX98357A LRC (shared)
-// GPIO12 → INMP441 SD (mic data input) - CHANGED FROM GPIO2
+// GPIO2  → INMP441 SD (mic data input) - SAFE PIN
 // GPIO13 → MAX98357A DIN (speaker data output)
 #define CONFIG_I2S_BCLK                     GPIO_NUM_14     // Bit clock (shared TX/RX)
 #define CONFIG_I2S_LRCK                     GPIO_NUM_15     // Word select (shared TX/RX)
 #define CONFIG_I2S_TX_DATA_OUT              GPIO_NUM_13     // MAX98357A speaker DIN
-#define CONFIG_I2S_RX_DATA_IN               GPIO_NUM_12     // INMP441 mic SD (CHANGED!)
+#define CONFIG_I2S_RX_DATA_IN               GPIO_NUM_2      // INMP441 mic SD (SAFE PIN!)
 
 // ========== Camera Pins (AI-Thinker Standard) ==========
 #define CONFIG_CAMERA_PIN_PWDN              GPIO_NUM_32     // Power down
-#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_NC     // Reset (not used - GPIO12 now for I2S)
+#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_NC     // Reset (not used - GPIO12 is strapping pin)
 #define CONFIG_CAMERA_PIN_XCLK              GPIO_NUM_0      // 20MHz clock
 #define CONFIG_CAMERA_PIN_SIOD              GPIO_NUM_26     // I2C data (SCCB)
 #define CONFIG_CAMERA_PIN_SIOC              GPIO_NUM_27     // I2C clock (SCCB)

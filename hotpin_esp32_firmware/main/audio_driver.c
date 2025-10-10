@@ -256,7 +256,7 @@ static esp_err_t configure_i2s_full_duplex(void) {
         .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared by TX and RX)
         .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared by TX and RX)
         .data_out_num = CONFIG_I2S_TX_DATA_OUT,     // Data output to speaker (GPIO13)
-        .data_in_num = CONFIG_I2S_RX_DATA_IN        // Data input from mic (GPIO12)
+        .data_in_num = CONFIG_I2S_RX_DATA_IN        // Data input from mic (GPIO2 - safe pin)
     };
     
     ESP_LOGI(TAG, "[STEP 2/5] Setting I2S pins...");
