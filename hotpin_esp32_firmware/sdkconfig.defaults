@@ -41,6 +41,14 @@ CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=32768
 CONFIG_ENABLE_SDMMC_HOST=n
 
 # ===========================
+# I2S Configuration (CRITICAL for Audio)
+# ===========================
+# Enable I2S ISR in IRAM to prevent failures during flash operations
+CONFIG_I2S_ISR_IRAM_SAFE=y
+# Prevent I2S DMA buffer corruption
+CONFIG_I2S_SUPPRESS_DEPRECATE_WARN=y
+
+# ===========================
 # FreeRTOS Configuration
 # ===========================
 CONFIG_FREERTOS_HZ=1000

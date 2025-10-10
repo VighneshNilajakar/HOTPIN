@@ -1,38 +1,146 @@
 📢 Voice mode STARTED (recording...)
-[0;32mI (46543) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY[0m
-[0;32mI (46543) SERIAL_CMD: Simulated SHORT PRESS - Voice START[0m
-[0;32mI (46544) STATE_MGR: Single click - mode toggle requested[0m
-[0;32mI (46555) STATE_MGR: Switching: Camera → Voice (count: 1)[0m
-[0;32mI (46561) STATE_MGR: === TRANSITION TO VOICE MODE ===[0m
-[0;32mI (46567) STATE_MGR: Stopping camera...[0m
-[0;32mI (46571) STATE_MGR: Acquiring I2S mutex...[0m
-[0;32mI (46576) STATE_MGR: Deinitializing camera...[0m
-[0;32mI (46581) CAMERA: Deinitializing camera...[0m
-[0;32mI (46587) CAMERA: Camera deinitialized[0m
-[0;32mI (46590) STATE_MGR: Waiting for camera resources to be released...[0m
-[0;32mI (46697) STATE_MGR: Initializing audio drivers...[0m
-[0;32mI (46697) AUDIO: Initializing dual I2S audio drivers...[0m
-[0;32mI (46698) AUDIO: Configuring I2S0 TX for MAX98357A...[0m
-[0;32mI (46705) AUDIO: I2S TX configured: 16000 Hz, 16-bit, mono[0m
-[0;32mI (46709) AUDIO: Configuring I2S1 RX for INMP441...[0m
-[0;32mI (46716) AUDIO: I2S RX configured: 16000 Hz, 16-bit, mono[0m
-[0;32mI (46721) AUDIO: ✅ Audio driver initialized successfully[0m
-[0;32mI (46727) AUDIO:    TX: I2S0 (MAX98357A) on GPIO13[0m
-[0;32mI (46733) AUDIO:    RX: I2S1 (INMP441) on GPIO12[0m
-[0;32mI (46738) AUDIO:    Shared BCLK: GPIO14, WS: GPIO15[0m
-[0;32mI (46744) STATE_MGR: I2S mutex released[0m
-[0;32mI (46748) STATE_MGR: Starting STT/TTS pipelines...[0m
-[0;32mI (46754) STT: Starting STT pipeline...[0m
-[0;31mE (46758) STT: STT pipeline not initialized[0m
-[0;31mE (46763) STATE_MGR: Failed to start STT pipeline: ESP_ERR_INVALID_STATE[0m
-[0;32mI (46770) TTS: Starting TTS decoder...[0m
-[0;31mE (46775) TTS: TTS decoder not initialized[0m
-[0;31mE (46780) STATE_MGR: Failed to start TTS decoder: ESP_ERR_INVALID_STATE[0m
-[0;32mI (46787) STATE_MGR: ✅ Voice mode transition complete[0m
-[0;32mI (46793) STATE_MGR: ✅ Entered VOICE_ACTIVE state[0m
-🔇 Voice mode STOPPED
-[0;32mI (50775) STATE_MGR: Button event received: 1 in state VOICE_ACTIVE[0m
-[0;32mI (50775) SERIAL_CMD: Simulated SHORT PRESS - Voice STOP[0m
-[0;32mI (50775) STATE_MGR: Single click - mode toggle requested[0m
-[0;32mI (50785) STATE_MGR: Switching: Voice → Camera (count: 2)[0m
-[0;32mI (50791) STATE_MGR: === TRANSITION TO CAMERA MODE ===[0m
+[0;32mI (16111) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY[0m
+[0;32mI (16111) SERIAL_CMD: Simulated SHORT PRESS - Voice START[0m
+[0;32mI (16111) STATE_MGR: Single click - mode toggle requested[0m
+[0;32mI (16122) STATE_MGR: Switching: Camera → Voice (count: 1)[0m
+[0;32mI (16129) STATE_MGR: === TRANSITION TO VOICE MODE ===[0m
+[0;32mI (16134) STATE_MGR: Stopping camera...[0m
+[0;32mI (16139) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (16155) STATE_MGR: ║ STEP 2: Acquiring I2S configuration mutex[0m
+[0;32mI (16162) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (16178) STATE_MGR:   Timeout: 5000 ms[0m
+[0;32mI (16183) STATE_MGR:   Timestamp: 14666 ms[0m
+[0;32mI (16187) STATE_MGR:   ✓ Mutex acquired (took 0 ms)[0m
+[0;32mI (16193) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (16209) STATE_MGR: ║ STEP 3: Deinitializing camera hardware[0m
+[0;32mI (16216) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (16232) STATE_MGR:   Free heap before: 4085984 bytes[0m
+[0;32mI (16238) STATE_MGR:   Free PSRAM before: 4065304 bytes[0m
+[0;32mI (16244) CAMERA: Deinitializing camera...[0m
+[0;32mI (16250) CAMERA: Camera deinitialized[0m
+[0;32mI (16253) STATE_MGR:   ✓ Camera deinitialized (took 9 ms)[0m
+[0;32mI (16259) STATE_MGR:   Free heap after: 4248088 bytes[0m
+[0;32mI (16265) STATE_MGR:   Free PSRAM after: 4189620 bytes[0m
+[0;32mI (16271) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (16287) STATE_MGR: ║ HARDWARE STABILIZATION - CRITICAL[0m
+[0;32mI (16293) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (16310) STATE_MGR:   Phase 1: Initial settle (100ms) - Free camera interrupts[0m
+[0;32mI (16418) STATE_MGR:   Phase 2: GPIO matrix settle (100ms) - Reconfigure pins[0m
+[0;32mI (16518) STATE_MGR:   Phase 3: Final settle (50ms) - Stabilize state[0m
+[0;32mI (16568) STATE_MGR:   ✓ Total stabilization: 250ms[0m
+[0;32mI (16568) STATE_MGR:   Timestamp: 15052 ms[0m
+[0;32mI (16568) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (16584) STATE_MGR: ║ STEP 4: Initializing I2S audio drivers[0m
+[0;32mI (16591) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (16607) STATE_MGR:   Free heap before: 4248080 bytes[0m
+[0;32mI (16613) AUDIO: Initializing I2S full-duplex audio driver...[0m
+[0;32mI (16619) AUDIO: ╔══════════════════════════════════════════════════════════[0m
+[0;32mI (16637) AUDIO: ║ Configuring I2S0 for full-duplex audio (TX+RX)[0m
+[0;32mI (16644) AUDIO: ╚══════════════════════════════════════════════════════════[0m
+[0;32mI (16662) AUDIO: [DIAG] Pre-init state:[0m
+[0;32mI (16666) AUDIO:   Free heap: 4248080 bytes[0m
+[0;32mI (16671) AUDIO:   Free PSRAM: 4189620 bytes[0m
+[0;32mI (16676) AUDIO:   Timestamp: 15160 ms[0m
+[0;32mI (16681) AUDIO: [CONFIG] I2S Configuration:[0m
+[0;32mI (16686) AUDIO:   Sample rate: 16000 Hz[0m
+[0;32mI (16690) AUDIO:   Bits per sample: 16[0m
+[0;32mI (16695) AUDIO:   DMA buffers: 8 x 1024 bytes[0m
+[0;32mI (16700) AUDIO:   Total DMA: 16384 bytes[0m
+[0;32mI (16704) AUDIO: [STEP 1/5] Installing I2S driver...[0m
+[0;32mI (16712) AUDIO: ✅ I2S driver installed (took 1 ms)[0m
+[0;32mI (16716) AUDIO: [STEP 2/5] Setting I2S pins...[0m
+[0;32mI (16721) AUDIO:   MCLK: DISABLED (I2S_PIN_NO_CHANGE)[0m
+[0;32mI (16727) AUDIO:   BCLK: GPIO14[0m
+[0;32mI (16731) AUDIO:   WS:   GPIO15[0m
+[0;32mI (16734) AUDIO:   DOUT: GPIO13 (Speaker)[0m
+[0;32mI (16739) AUDIO:   DIN:  GPIO12 (Microphone)[0m
+[0;32mI (16744) AUDIO: ✅ I2S pins configured (took 0 ms)[0m
+[0;32mI (16750) AUDIO: [STEP 3/5] Clearing DMA buffers...[0m
+[0;32mI (16755) AUDIO: ✅ DMA buffers cleared (took 0 ms)[0m
+[0;32mI (16761) AUDIO: [STEP 4/5] Starting I2S peripheral...[0m
+[0;32mI (16767) AUDIO: ✅ I2S peripheral started (took 0 ms)[0m
+[0;32mI (16773) AUDIO: [STEP 5/5] Hardware stabilization...[0m
+[0;32mI (16778) AUDIO:   Phase 1: Initial settle (50ms)[0m
+[0;32mI (16834) AUDIO:   Phase 2: DMA verification[0m
+[0;32mI (16834) AUDIO:   ✓ DMA TX operational (128 bytes)[0m
+[0;32mI (16835) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX[0m
+[0;32mI (16991) AUDIO: [DIAG] Post-init state:[0m
+[0;32mI (16991) AUDIO:   Free heap: 4245076 bytes[0m
+[0;32mI (16992) AUDIO:   Free PSRAM: 4189620 bytes[0m
+[0;32mI (16995) AUDIO:   Timestamp: 15478 ms[0m
+[0;32mI (16999) AUDIO:   Total init time: 201 ms[0m
+[0;32mI (17004) AUDIO: ╔══════════════════════════════════════════════════════════[0m
+[0;32mI (17022) AUDIO: ║ ✅ I2S FULL-DUPLEX READY[0m
+[0;32mI (17027) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: 16-bit mono[0m
+[0;32mI (17035) AUDIO: ╚══════════════════════════════════════════════════════════[0m
+[0;32mI (17053) AUDIO: ✅ Audio driver initialized successfully[0m
+[0;32mI (17059) AUDIO:    Mode: Full-duplex (TX + RX)[0m
+[0;32mI (17064) AUDIO:    TX (Speaker): I2S0 on GPIO13[0m
+[0;32mI (17069) AUDIO:    RX (Microphone): I2S0 on GPIO12[0m
+[0;32mI (17075) AUDIO:    Shared BCLK: GPIO14, WS: GPIO15[0m
+[0;32mI (17081) STATE_MGR:   ✓ Audio initialized (took 467 ms)[0m
+[0;32mI (17087) STATE_MGR:   Free heap after: 4245076 bytes[0m
+[0;32mI (17092) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (17109) STATE_MGR: ║ STEP 5: I2S mutex released[0m
+[0;32mI (17114) STATE_MGR: ║ Total transition time: 726 ms[0m
+[0;32mI (17120) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (17136) STATE_MGR: ╔══════════════════════════════════════════════════[0m
+[0;32mI (17153) STATE_MGR: ║ STEP 6: Starting STT/TTS pipelines[0m
+[0;32mI (17159) STATE_MGR: ╚══════════════════════════════════════════════════[0m
+[0;32mI (17175) STT: Starting STT pipeline...[0m
+[0;32mI (17180) STT: Initializing STT pipeline...[0m
+[0;33mW (17184) STT: STT pipeline already initialized[0m
+[0;32mI (17190) STT: ✅ STT pipeline started[0m
+[0;32mI (17194) TTS: Starting TTS decoder...[0m
+[0;32mI (17199) TTS: Initializing TTS decoder...[0m
+[0;33mW (17203) TTS: TTS decoder already initialized[0m
+[0;32mI (17208) TTS: ✅ TTS decoder started[0m
+[0;32mI (17213) STATE_MGR: ✅ Voice mode transition complete[0m
+[0;32mI (17219) STATE_MGR: ✅ Entered VOICE_ACTIVE state[0m
+[0;32mI (17224) STT: ╔════════════════════════════════════════════════════[0m
+[0;32mI (17241) STT: ║ Audio Capture Task Started on Core 1[0m
+[0;32mI (17246) STT: ╚════════════════════════════════════════════════════[0m
+[0;32mI (17263) STT: [STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...[0m
+[0;32mI (17270) STT:   Current time: 15753 ms[0m
+[0;32mI (17274) STT:   Free heap: 4231716 bytes[0m
+[0;32mI (17225) STT: Audio streaming task started on Core 1[0m
+[0;32mI (17285) STT: Starting audio streaming to server...[0m
+[0;32mI (17290) TTS: TTS playback task started on Core 1[0m
+[0;32mI (17479) STT: [STABILIZATION] Phase 2: Verify audio driver state...[0m
+[0;32mI (17479) STT:   ✓ Audio driver initialized[0m
+[0;32mI (17480) STT: [STABILIZATION] Phase 3: Additional 100ms settle...[0m
+[0;32mI (17587) STT:   Total stabilization: 300ms[0m
+[0;32mI (17587) STT:   Timestamp: 16071 ms[0m
+[0;32mI (17587) STT: [BUFFER] Allocating 1024 byte capture buffer...[0m
+[0;32mI (17592) STT:   ✓ DMA-capable buffer allocated at 0x3ffe385c[0m
+[0;32mI (17598) STT: ╔════════════════════════════════════════════════════[0m
+[0;32mI (17615) STT: ║ 🎤 STARTING AUDIO CAPTURE[0m
+[0;32mI (17620) STT: ║ Chunk size: 1024 bytes | Timeout: 100 ms[0m
+[0;32mI (17626) STT: ╚════════════════════════════════════════════════════[0m
+[0;32mI (17642) STT: [FIRST READ] Completed:[0m
+[0;32mI (17647) STT:   Result: ESP_OK[0m
+[0;32mI (17651) STT:   Bytes read: 1024 / 1024[0m
+[0;32mI (17655) STT:   Duration: 0 ms[0m
+[0;32mI (17659) STT:   Timestamp: 16126 ms[0m
+[0;32mI (17664) STT:   First 16 bytes: 52 f8 52 f8 52 f8 52 f8 52 f8 52 f8 54 f8 52 f8[0m
+[0;32mI (17672) STT: [CAPTURE] Read #10: 1024 bytes (total: 10240 bytes, 10.0 KB)[0m
+[0;32mI (17679) STT:   Avg read time: 0 ms | Errors: 0[0m
+Guru Meditation Error: Core  1 panic'ed (LoadStoreError). Exception was unhandled.
+
+Core  1 register dump:
+PC      : 0x400de66f  PS      : 0x00060330  A0      : 0x00000000  A1      : 0x3fff5620  
+A2      : 0x00001000  A3      : 0x3ffb730c  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x4009b398  A7      : 0x3f40847c  A8      : 0x800de5fa  A9      : 0x00000001  
+A10     : 0x00001000  A11     : 0x00000001  A12     : 0x3ffb7310  A13     : 0x4009b398  
+A14     : 0x3ffe46bc  A15     : 0x00000052  SAR     : 0x00000004  EXCCAUSE: 0x00000003  
+EXCVADDR: 0x4009b398  LBEG    : 0x400de661  LEND    : 0x400de675  LCOUNT  : 0x00000fff  
+
+
+Backtrace: 0x400de66c:0x3fff5620
+
+
+
+
+ELF file SHA256: 939d0f160
+
+Rebooting...

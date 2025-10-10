@@ -15,6 +15,7 @@
 #include "websocket_client.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -65,15 +66,22 @@ esp_err_t stt_pipeline_init(void) {
         return ESP_OK;
     }
     
-    // Allocate PSRAM ring buffer
-    ESP_LOGI(TAG, "Allocating %zu KB ring buffer in PSRAM...", g_ring_buffer_size / 1024);
-    g_audio_ring_buffer = heap_caps_malloc(g_ring_buffer_size, MALLOC_CAP_SPIRAM);
+    // Allocate ring buffer in DMA-capable internal RAM for reliability
+    // Note: PSRAM can cause cache coherency issues with DMA operations
+    ESP_LOGI(TAG, "Allocating %zu KB ring buffer in internal RAM...", g_ring_buffer_size / 1024);
+    g_audio_ring_buffer = heap_caps_malloc(g_ring_buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (g_audio_ring_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate ring buffer in PSRAM");
+        ESP_LOGE(TAG, "Failed to allocate ring buffer in internal RAM");
+        ESP_LOGE(TAG, "  Requested: %zu bytes", g_ring_buffer_size);
+        ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
         return ESP_ERR_NO_MEM;
     }
+    ESP_LOGI(TAG, "  ✓ Ring buffer allocated at %p", g_audio_ring_buffer);
     
-    memset(g_audio_ring_buffer, 0, g_ring_buffer_size);
+    // Zero buffer safely (no memset to avoid cache issues)
+    for (size_t i = 0; i < g_ring_buffer_size; i++) {
+        g_audio_ring_buffer[i] = 0;
+    }
     g_ring_buffer_write_pos = 0;
     g_ring_buffer_read_pos = 0;
     
@@ -231,39 +239,117 @@ bool stt_pipeline_is_recording(void) {
 // ===========================
 
 static void audio_capture_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Audio capture task started on Core %d", xPortGetCoreID());
+    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ Audio Capture Task Started on Core %d", xPortGetCoreID());
+    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
     
-    uint8_t *capture_buffer = heap_caps_malloc(AUDIO_CAPTURE_CHUNK_SIZE, MALLOC_CAP_INTERNAL);
-    if (capture_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate capture buffer");
+    // CRITICAL: Extended wait for I2S hardware to fully stabilize before first read
+    ESP_LOGI(TAG, "[STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...");
+    ESP_LOGI(TAG, "  Current time: %lld ms", (long long)(esp_timer_get_time() / 1000));
+    ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    ESP_LOGI(TAG, "[STABILIZATION] Phase 2: Verify audio driver state...");
+    if (!audio_driver_is_initialized()) {
+        ESP_LOGE(TAG, "❌ CRITICAL: Audio driver not initialized!");
         vTaskDelete(NULL);
         return;
     }
+    ESP_LOGI(TAG, "  ✓ Audio driver initialized");
+    
+    ESP_LOGI(TAG, "[STABILIZATION] Phase 3: Additional 100ms settle...");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(TAG, "  Total stabilization: 300ms");
+    ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)(esp_timer_get_time() / 1000));
+    
+    ESP_LOGI(TAG, "[BUFFER] Allocating %d byte capture buffer...", AUDIO_CAPTURE_CHUNK_SIZE);
+    // CRITICAL: Use DMA-capable memory (MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
+    uint8_t *capture_buffer = heap_caps_malloc(AUDIO_CAPTURE_CHUNK_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (capture_buffer == NULL) {
+        ESP_LOGE(TAG, "❌ Failed to allocate DMA-capable capture buffer");
+        ESP_LOGE(TAG, "  Requested: %d bytes", AUDIO_CAPTURE_CHUNK_SIZE);
+        ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+        ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "  ✓ DMA-capable buffer allocated at %p", capture_buffer);
+    
+    // Zero out buffer for first read
+    memset(capture_buffer, 0, AUDIO_CAPTURE_CHUNK_SIZE);
     
     size_t bytes_read = 0;
     uint32_t total_bytes_captured = 0;
+    uint32_t read_count = 0;
+    uint32_t error_count = 0;
+    int64_t first_read_time = 0;
+    
+    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ 🎤 STARTING AUDIO CAPTURE");
+    ESP_LOGI(TAG, "║ Chunk size: %d bytes | Timeout: %d ms", AUDIO_CAPTURE_CHUNK_SIZE, AUDIO_CAPTURE_TIMEOUT_MS);
+    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
     
     while (is_running) {
+        int64_t read_start = esp_timer_get_time();
+        
         // Read audio from I2S RX (microphone)
         esp_err_t ret = audio_driver_read(capture_buffer, AUDIO_CAPTURE_CHUNK_SIZE, 
                                            &bytes_read, AUDIO_CAPTURE_TIMEOUT_MS);
+        
+        int64_t read_duration = (esp_timer_get_time() - read_start) / 1000;
+        read_count++;
+        
+        // Log first read with detailed diagnostics
+        if (read_count == 1) {
+            first_read_time = esp_timer_get_time() / 1000;
+            ESP_LOGI(TAG, "[FIRST READ] Completed:");
+            ESP_LOGI(TAG, "  Result: %s", esp_err_to_name(ret));
+            ESP_LOGI(TAG, "  Bytes read: %zu / %d", bytes_read, AUDIO_CAPTURE_CHUNK_SIZE);
+            ESP_LOGI(TAG, "  Duration: %lld ms", (long long)read_duration);
+            ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)first_read_time);
+            
+            // CRITICAL: Small delay for cache coherency after DMA transfer
+            if (bytes_read >= 16) {
+                vTaskDelay(pdMS_TO_TICKS(1)); // 1ms to ensure DMA completion
+                ESP_LOGI(TAG, "  First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                         capture_buffer[0], capture_buffer[1], capture_buffer[2], capture_buffer[3],
+                         capture_buffer[4], capture_buffer[5], capture_buffer[6], capture_buffer[7],
+                         capture_buffer[8], capture_buffer[9], capture_buffer[10], capture_buffer[11],
+                         capture_buffer[12], capture_buffer[13], capture_buffer[14], capture_buffer[15]);
+            }
+        }
         
         if (ret == ESP_OK && bytes_read > 0) {
             // Write to ring buffer
             ret = ring_buffer_write(capture_buffer, bytes_read);
             if (ret == ESP_OK) {
                 total_bytes_captured += bytes_read;
-                ESP_LOGD(TAG, "Captured %zu bytes (total: %lu)", bytes_read, total_bytes_captured);
+                
+                // Log every 10th successful read
+                if (read_count % 10 == 0) {
+                    ESP_LOGI(TAG, "[CAPTURE] Read #%u: %zu bytes (total: %u bytes, %.1f KB)",
+                             (unsigned int)read_count, bytes_read, (unsigned int)total_bytes_captured, total_bytes_captured / 1024.0);
+                    ESP_LOGI(TAG, "  Avg read time: %lld ms | Errors: %u", (long long)read_duration, (unsigned int)error_count);
+                }
             } else {
-                ESP_LOGW(TAG, "Ring buffer full - dropping %zu bytes", bytes_read);
+                ESP_LOGW(TAG, "⚠ Ring buffer full - dropping %zu bytes (read #%u)", bytes_read, (unsigned int)read_count);
             }
         } else if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "I2S read error: %s", esp_err_to_name(ret));
+            error_count++;
+            ESP_LOGE(TAG, "❌ I2S read error #%u (read #%u): %s", (unsigned int)error_count, (unsigned int)read_count, esp_err_to_name(ret));
+            ESP_LOGE(TAG, "  Bytes read: %zu | Duration: %lld ms", bytes_read, (long long)read_duration);
+            ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+            
+            // If first few reads fail, something is seriously wrong
+            if (read_count < 5) {
+                ESP_LOGE(TAG, "❌ CRITICAL: Early read failure - I2S may not be properly initialized");
+            }
+            
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
     
-    ESP_LOGI(TAG, "Audio capture task stopped (captured %lu bytes total)", total_bytes_captured);
+    ESP_LOGI(TAG, "Audio capture task stopped (captured %u bytes total)", (unsigned int)total_bytes_captured);
     heap_caps_free(capture_buffer);
     vTaskDelete(NULL);
 }
@@ -312,8 +398,8 @@ static void audio_streaming_task(void *pvParameters) {
                 if (ret == ESP_OK) {
                     total_bytes_streamed += bytes_read;
                     chunk_count++;
-                    ESP_LOGD(TAG, "Streamed chunk #%lu (%zu bytes, total: %lu)", 
-                             chunk_count, bytes_read, total_bytes_streamed);
+                    ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)", 
+                             (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
                 } else {
                     ESP_LOGE(TAG, "WebSocket send failed: %s", esp_err_to_name(ret));
                     vTaskDelay(pdMS_TO_TICKS(100));
@@ -325,8 +411,8 @@ static void audio_streaming_task(void *pvParameters) {
         }
     }
     
-    ESP_LOGI(TAG, "Audio streaming task stopped (streamed %lu bytes in %lu chunks)", 
-             total_bytes_streamed, chunk_count);
+    ESP_LOGI(TAG, "Audio streaming task stopped (streamed %u bytes in %u chunks)", 
+             (unsigned int)total_bytes_streamed, (unsigned int)chunk_count);
     heap_caps_free(stream_buffer);
     vTaskDelete(NULL);
 }
@@ -361,13 +447,30 @@ static size_t ring_buffer_available_data(void) {
 }
 
 static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) {
+    // Validate inputs
+    if (data == NULL || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
     if (ring_buffer_available_space() < len) {
         return ESP_ERR_NO_MEM;  // Buffer full
     }
     
-    xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
+    if (!xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(100))) {
+        ESP_LOGW(TAG, "⚠ Ring buffer mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
     
+    // Safe byte-by-byte copy with bounds checking
     for (size_t i = 0; i < len; i++) {
+        // Double-check we're within bounds (paranoid safety)
+        if (g_ring_buffer_write_pos >= g_ring_buffer_size) {
+            ESP_LOGE(TAG, "❌ Ring buffer write pos overflow: %zu >= %zu", 
+                     g_ring_buffer_write_pos, g_ring_buffer_size);
+            xSemaphoreGive(g_ring_buffer_mutex);
+            return ESP_ERR_INVALID_STATE;
+        }
+        
         g_audio_ring_buffer[g_ring_buffer_write_pos] = data[i];
         g_ring_buffer_write_pos = (g_ring_buffer_write_pos + 1) % g_ring_buffer_size;
     }
@@ -377,6 +480,11 @@ static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) {
 }
 
 static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read) {
+    // Validate inputs
+    if (data == NULL || bytes_read == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
     size_t available = ring_buffer_available_data();
     size_t to_read = (len < available) ? len : available;
     
@@ -385,9 +493,23 @@ static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read)
         return ESP_OK;
     }
     
-    xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
+    if (!xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(100))) {
+        ESP_LOGW(TAG, "⚠ Ring buffer mutex timeout (read)");
+        *bytes_read = 0;
+        return ESP_ERR_TIMEOUT;
+    }
     
+    // Safe byte-by-byte copy with bounds checking
     for (size_t i = 0; i < to_read; i++) {
+        // Double-check we're within bounds (paranoid safety)
+        if (g_ring_buffer_read_pos >= g_ring_buffer_size) {
+            ESP_LOGE(TAG, "❌ Ring buffer read pos overflow: %zu >= %zu", 
+                     g_ring_buffer_read_pos, g_ring_buffer_size);
+            xSemaphoreGive(g_ring_buffer_mutex);
+            *bytes_read = i;  // Return what we managed to read
+            return ESP_ERR_INVALID_STATE;
+        }
+        
         data[i] = g_audio_ring_buffer[g_ring_buffer_read_pos];
         g_ring_buffer_read_pos = (g_ring_buffer_read_pos + 1) % g_ring_buffer_size;
     }

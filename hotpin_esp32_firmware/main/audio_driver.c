@@ -15,122 +15,110 @@
 #include "driver/i2s.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include <string.h>
 
 static const char *TAG = TAG_AUDIO;
 static bool is_initialized = false;
-static bool tx_enabled = false;
-static bool rx_enabled = false;
+
+// Use single I2S peripheral for full-duplex operation
+#define I2S_AUDIO_NUM    I2S_NUM_0
 
 // ===========================
 // Private Function Declarations
 // ===========================
-static esp_err_t configure_i2s_tx(void);
-static esp_err_t configure_i2s_rx(void);
+static esp_err_t configure_i2s_full_duplex(void);
 
 // ===========================
 // Public Functions
 // ===========================
 
 esp_err_t audio_driver_init(void) {
-    ESP_LOGI(TAG, "Initializing dual I2S audio drivers...");
+    ESP_LOGI(TAG, "Initializing I2S full-duplex audio driver...");
     
     if (is_initialized) {
         ESP_LOGW(TAG, "Audio driver already initialized");
         return ESP_OK;
     }
     
-    esp_err_t ret;
-    
-    // ===========================
-    // Configure I2S0 (TX) - Speaker Output
-    // ===========================
-    ret = configure_i2s_tx();
+    // Configure single I2S peripheral for both TX and RX
+    esp_err_t ret = configure_i2s_full_duplex();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure I2S TX: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to configure I2S full-duplex: %s", esp_err_to_name(ret));
         return ret;
     }
-    tx_enabled = true;
-    
-    // ===========================
-    // Configure I2S1 (RX) - Microphone Input
-    // ===========================
-    ret = configure_i2s_rx();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure I2S RX: %s", esp_err_to_name(ret));
-        audio_driver_deinit();  // Clean up TX on failure
-        return ret;
-    }
-    rx_enabled = true;
     
     is_initialized = true;
     ESP_LOGI(TAG, "✅ Audio driver initialized successfully");
-    ESP_LOGI(TAG, "   TX: I2S0 (MAX98357A) on GPIO%d", CONFIG_I2S_TX_DATA_OUT);
-    ESP_LOGI(TAG, "   RX: I2S1 (INMP441) on GPIO%d", CONFIG_I2S_RX_DATA_IN);
+    ESP_LOGI(TAG, "   Mode: Full-duplex (TX + RX)");
+    ESP_LOGI(TAG, "   TX (Speaker): I2S0 on GPIO%d", CONFIG_I2S_TX_DATA_OUT);
+    ESP_LOGI(TAG, "   RX (Microphone): I2S0 on GPIO%d", CONFIG_I2S_RX_DATA_IN);
     ESP_LOGI(TAG, "   Shared BCLK: GPIO%d, WS: GPIO%d", CONFIG_I2S_BCLK, CONFIG_I2S_LRCK);
     
     return ESP_OK;
 }
 
 esp_err_t audio_driver_deinit(void) {
-    ESP_LOGI(TAG, "Deinitializing I2S drivers...");
+    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ Deinitializing I2S Driver for Camera Capture");
+    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
     
     if (!is_initialized) {
-        ESP_LOGW(TAG, "Audio driver not initialized");
+        ESP_LOGW(TAG, "Audio driver not initialized - nothing to deinit");
         return ESP_OK;
     }
     
-    esp_err_t ret_tx = ESP_OK;
-    esp_err_t ret_rx = ESP_OK;
-    
-    // FIX: Stop I2S operations before uninstalling
-    if (tx_enabled) {
-        i2s_stop(CONFIG_I2S_NUM_TX);
-        ESP_LOGI(TAG, "I2S TX stopped");
+    // Step 1: Stop I2S peripheral
+    ESP_LOGI(TAG, "[STEP 1/3] Stopping I2S peripheral...");
+    esp_err_t ret = i2s_stop(I2S_AUDIO_NUM);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "⚠ i2s_stop returned: %s (continuing anyway)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "✅ I2S peripheral stopped");
     }
     
-    if (rx_enabled) {
-        i2s_stop(CONFIG_I2S_NUM_RX);
-        ESP_LOGI(TAG, "I2S RX stopped");
-    }
-    
-    // FIX: Add delay to ensure DMA operations complete
+    // Step 2: Allow DMA operations to complete
+    ESP_LOGI(TAG, "[STEP 2/3] Waiting for DMA completion (50ms)...");
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // Uninstall I2S drivers
-    if (tx_enabled) {
-        ret_tx = i2s_driver_uninstall(CONFIG_I2S_NUM_TX);
-        if (ret_tx != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to uninstall I2S TX: %s", esp_err_to_name(ret_tx));
-        } else {
-            ESP_LOGI(TAG, "I2S TX uninstalled");
-        }
-        tx_enabled = false;
+    // Step 3: Uninstall I2S driver (frees interrupts and resources)
+    ESP_LOGI(TAG, "[STEP 3/3] Uninstalling I2S driver...");
+    ESP_LOGI(TAG, "  This will free:");
+    ESP_LOGI(TAG, "    - I2S peripheral interrupt allocation");
+    ESP_LOGI(TAG, "    - DMA descriptors and buffers");
+    ESP_LOGI(TAG, "    - GPIO matrix configuration");
+    
+    int64_t start_time = esp_timer_get_time();
+    ret = i2s_driver_uninstall(I2S_AUDIO_NUM);
+    int64_t uninstall_time = (esp_timer_get_time() - start_time) / 1000;
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ i2s_driver_uninstall FAILED: %s (took %lld ms)", 
+                 esp_err_to_name(ret), (long long)uninstall_time);
+        ESP_LOGE(TAG, "  This may cause camera init to fail");
+        // Continue anyway to update state
+    } else {
+        ESP_LOGI(TAG, "✅ I2S driver uninstalled successfully (took %lld ms)", 
+                 (long long)uninstall_time);
     }
     
-    if (rx_enabled) {
-        ret_rx = i2s_driver_uninstall(CONFIG_I2S_NUM_RX);
-        if (ret_rx != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to uninstall I2S RX: %s", esp_err_to_name(ret_rx));
-        } else {
-            ESP_LOGI(TAG, "I2S RX uninstalled");
-        }
-        rx_enabled = false;
-    }
-    
-    // FIX: Additional delay to free interrupt resources before camera init
+    // Additional delay to ensure interrupt controller and GPIO matrix settle
+    ESP_LOGI(TAG, "Additional settling time (50ms) for interrupt/GPIO matrix...");
     vTaskDelay(pdMS_TO_TICKS(50));
     
+    // Mark as uninitialized
     is_initialized = false;
-    ESP_LOGI(TAG, "Audio driver deinitialized");
     
-    // Return error if either uninstall failed
-    return (ret_tx != ESP_OK) ? ret_tx : ret_rx;
+    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ ✅ I2S Driver Deinitialized - Camera Can Now Init");
+    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
+    
+    return ret;
 }
 
 esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_written, uint32_t timeout_ms) {
-    if (!is_initialized || !tx_enabled) {
-        ESP_LOGE(TAG, "I2S TX not initialized");
+    if (!is_initialized) {
+        ESP_LOGE(TAG, "I2S driver not initialized");
         if (bytes_written) *bytes_written = 0;
         return ESP_ERR_INVALID_STATE;
     }
@@ -144,7 +132,7 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
     size_t written = 0;
     TickType_t ticks_to_wait = timeout_ms / portTICK_PERIOD_MS;
     
-    esp_err_t ret = i2s_write(CONFIG_I2S_NUM_TX, data, size, &written, ticks_to_wait);
+    esp_err_t ret = i2s_write(I2S_AUDIO_NUM, data, size, &written, ticks_to_wait);
     
     if (bytes_written) {
         *bytes_written = written;
@@ -163,8 +151,8 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
 }
 
 esp_err_t audio_driver_read(uint8_t *buffer, size_t size, size_t *bytes_read, uint32_t timeout_ms) {
-    if (!is_initialized || !rx_enabled) {
-        ESP_LOGE(TAG, "I2S RX not initialized");
+    if (!is_initialized) {
+        ESP_LOGE(TAG, "I2S driver not initialized");
         if (bytes_read) *bytes_read = 0;
         return ESP_ERR_INVALID_STATE;
     }
@@ -178,7 +166,7 @@ esp_err_t audio_driver_read(uint8_t *buffer, size_t size, size_t *bytes_read, ui
     size_t read = 0;
     TickType_t ticks_to_wait = timeout_ms / portTICK_PERIOD_MS;
     
-    esp_err_t ret = i2s_read(CONFIG_I2S_NUM_RX, buffer, size, &read, ticks_to_wait);
+    esp_err_t ret = i2s_read(I2S_AUDIO_NUM, buffer, size, &read, ticks_to_wait);
     
     if (bytes_read) {
         *bytes_read = read;
@@ -205,130 +193,145 @@ esp_err_t audio_driver_clear_buffers(void) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    esp_err_t ret_tx = ESP_OK;
-    esp_err_t ret_rx = ESP_OK;
-    
-    if (tx_enabled) {
-        ret_tx = i2s_zero_dma_buffer(CONFIG_I2S_NUM_TX);
-        if (ret_tx != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to clear TX buffer: %s", esp_err_to_name(ret_tx));
-        }
+    esp_err_t ret = i2s_zero_dma_buffer(I2S_AUDIO_NUM);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to clear DMA buffer: %s", esp_err_to_name(ret));
     }
     
-    if (rx_enabled) {
-        ret_rx = i2s_zero_dma_buffer(CONFIG_I2S_NUM_RX);
-        if (ret_rx != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to clear RX buffer: %s", esp_err_to_name(ret_rx));
-        }
-    }
-    
-    return (ret_tx != ESP_OK) ? ret_tx : ret_rx;
+    return ret;
 }
 
 // ===========================
 // Private Functions
 // ===========================
 
-static esp_err_t configure_i2s_tx(void) {
-    ESP_LOGI(TAG, "Configuring I2S0 TX for MAX98357A...");
+static esp_err_t configure_i2s_full_duplex(void) {
+    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ Configuring I2S0 for full-duplex audio (TX+RX)");
+    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
     
-    // I2S TX configuration
-    i2s_config_t i2s_tx_config = {
-        .mode = I2S_MODE_MASTER | I2S_MODE_TX,
+    // Diagnostic: Check system state before I2S init
+    ESP_LOGI(TAG, "[DIAG] Pre-init state:");
+    ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)(esp_timer_get_time() / 1000));
+    
+    // I2S full-duplex configuration (both TX and RX on single peripheral)
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX,  // Full-duplex
         .sample_rate = CONFIG_AUDIO_SAMPLE_RATE,
         .bits_per_sample = CONFIG_AUDIO_BITS_PER_SAMPLE,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Mono output
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Mono for both
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED,  // FIX: Shared interrupt to prevent exhaustion
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Non-shared now (only one peripheral)
         .dma_buf_count = CONFIG_I2S_DMA_BUF_COUNT,
         .dma_buf_len = CONFIG_I2S_DMA_BUF_LEN,
-        .use_apll = false,                             // Use PLL, not APLL
-        .tx_desc_auto_clear = true,                    // Auto-clear on underflow
+        .use_apll = false,                            // Use PLL, not APLL
+        .tx_desc_auto_clear = true,                   // Auto-clear TX on underflow
         .fixed_mclk = 0
     };
     
-    // Install I2S driver
-    esp_err_t ret = i2s_driver_install(CONFIG_I2S_NUM_TX, &i2s_tx_config, 0, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install I2S TX driver: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    // I2S TX pin configuration
-    i2s_pin_config_t i2s_tx_pins = {
-        .mck_io_num = I2S_PIN_NO_CHANGE,            // FIX: Disable MCLK to prevent pin conflict
-        .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared)
-        .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared)
-        .data_out_num = CONFIG_I2S_TX_DATA_OUT,     // Data output to speaker
-        .data_in_num = I2S_PIN_NO_CHANGE            // No input on TX
-    };
-    
-    ret = i2s_set_pin(CONFIG_I2S_NUM_TX, &i2s_tx_pins);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set I2S TX pins: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "TX Pin config: BCLK=%d, WS=%d, DOUT=%d, MCLK=DISABLED", 
-                 CONFIG_I2S_BCLK, CONFIG_I2S_LRCK, CONFIG_I2S_TX_DATA_OUT);
-        i2s_driver_uninstall(CONFIG_I2S_NUM_TX);
-        return ret;
-    }
-    
-    // Clear DMA buffers
-    i2s_zero_dma_buffer(CONFIG_I2S_NUM_TX);
-    
-    ESP_LOGI(TAG, "I2S TX configured: %d Hz, %d-bit, mono", 
-             CONFIG_AUDIO_SAMPLE_RATE, 16);
-    
-    return ESP_OK;
-}
-
-static esp_err_t configure_i2s_rx(void) {
-    ESP_LOGI(TAG, "Configuring I2S1 RX for INMP441...");
-    
-    // I2S RX configuration
-    i2s_config_t i2s_rx_config = {
-        .mode = I2S_MODE_MASTER | I2S_MODE_RX,
-        .sample_rate = CONFIG_AUDIO_SAMPLE_RATE,
-        .bits_per_sample = CONFIG_AUDIO_BITS_PER_SAMPLE,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Mono input
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED,  // FIX: Shared interrupt to prevent exhaustion
-        .dma_buf_count = CONFIG_I2S_DMA_BUF_COUNT,
-        .dma_buf_len = CONFIG_I2S_DMA_BUF_LEN,
-        .use_apll = false,                             // Use PLL, not APLL
-        .tx_desc_auto_clear = false,                   // N/A for RX
-        .fixed_mclk = 0
-    };
+    ESP_LOGI(TAG, "[CONFIG] I2S Configuration:");
+    ESP_LOGI(TAG, "  Sample rate: %u Hz", (unsigned int)i2s_config.sample_rate);
+    ESP_LOGI(TAG, "  Bits per sample: %d", i2s_config.bits_per_sample);
+    ESP_LOGI(TAG, "  DMA buffers: %d x %d bytes", i2s_config.dma_buf_count, i2s_config.dma_buf_len);
+    ESP_LOGI(TAG, "  Total DMA: %d bytes", i2s_config.dma_buf_count * i2s_config.dma_buf_len * 2);
     
     // Install I2S driver
-    esp_err_t ret = i2s_driver_install(CONFIG_I2S_NUM_RX, &i2s_rx_config, 0, NULL);
+    ESP_LOGI(TAG, "[STEP 1/5] Installing I2S driver...");
+    int64_t start_time = esp_timer_get_time();
+    esp_err_t ret = i2s_driver_install(I2S_AUDIO_NUM, &i2s_config, 0, NULL);
+    int64_t install_time = (esp_timer_get_time() - start_time) / 1000;
+    
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install I2S RX driver: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "❌ I2S driver install FAILED: %s (took %lld ms)", esp_err_to_name(ret), (long long)install_time);
+        ESP_LOGE(TAG, "  Free heap after fail: %u bytes", (unsigned int)esp_get_free_heap_size());
         return ret;
     }
+    ESP_LOGI(TAG, "✅ I2S driver installed (took %lld ms)", (long long)install_time);
     
-    // I2S RX pin configuration (shared BCLK and WS with TX)
-    i2s_pin_config_t i2s_rx_pins = {
-        .mck_io_num = I2S_PIN_NO_CHANGE,            // FIX: Disable MCLK to prevent pin conflict
-        .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared with TX)
-        .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared with TX)
-        .data_out_num = I2S_PIN_NO_CHANGE,          // No output on RX
-        .data_in_num = CONFIG_I2S_RX_DATA_IN        // Data input from mic
+    // I2S pin configuration with both TX and RX pins
+    i2s_pin_config_t i2s_pins = {
+        .mck_io_num = I2S_PIN_NO_CHANGE,            // No MCLK - CRITICAL
+        .bck_io_num = CONFIG_I2S_BCLK,              // Bit clock (shared by TX and RX)
+        .ws_io_num = CONFIG_I2S_LRCK,               // Word select (shared by TX and RX)
+        .data_out_num = CONFIG_I2S_TX_DATA_OUT,     // Data output to speaker (GPIO13)
+        .data_in_num = CONFIG_I2S_RX_DATA_IN        // Data input from mic (GPIO12)
     };
     
-    ret = i2s_set_pin(CONFIG_I2S_NUM_RX, &i2s_rx_pins);
+    ESP_LOGI(TAG, "[STEP 2/5] Setting I2S pins...");
+    ESP_LOGI(TAG, "  MCLK: DISABLED (I2S_PIN_NO_CHANGE)");
+    ESP_LOGI(TAG, "  BCLK: GPIO%d", CONFIG_I2S_BCLK);
+    ESP_LOGI(TAG, "  WS:   GPIO%d", CONFIG_I2S_LRCK);
+    ESP_LOGI(TAG, "  DOUT: GPIO%d (Speaker)", CONFIG_I2S_TX_DATA_OUT);
+    ESP_LOGI(TAG, "  DIN:  GPIO%d (Microphone)", CONFIG_I2S_RX_DATA_IN);
+    
+    start_time = esp_timer_get_time();
+    ret = i2s_set_pin(I2S_AUDIO_NUM, &i2s_pins);
+    int64_t pin_time = (esp_timer_get_time() - start_time) / 1000;
+    
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set I2S RX pins: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "RX Pin config: BCLK=%d, WS=%d, DIN=%d, MCLK=DISABLED", 
-                 CONFIG_I2S_BCLK, CONFIG_I2S_LRCK, CONFIG_I2S_RX_DATA_IN);
-        i2s_driver_uninstall(CONFIG_I2S_NUM_RX);
+        ESP_LOGE(TAG, "❌ I2S pin config FAILED: %s (took %lld ms)", esp_err_to_name(ret), (long long)pin_time);
+        i2s_driver_uninstall(I2S_AUDIO_NUM);
         return ret;
     }
+    ESP_LOGI(TAG, "✅ I2S pins configured (took %lld ms)", (long long)pin_time);
     
     // Clear DMA buffers
-    i2s_zero_dma_buffer(CONFIG_I2S_NUM_RX);
+    ESP_LOGI(TAG, "[STEP 3/5] Clearing DMA buffers...");
+    start_time = esp_timer_get_time();
+    ret = i2s_zero_dma_buffer(I2S_AUDIO_NUM);
+    int64_t clear_time = (esp_timer_get_time() - start_time) / 1000;
     
-    ESP_LOGI(TAG, "I2S RX configured: %d Hz, %d-bit, mono", 
-             CONFIG_AUDIO_SAMPLE_RATE, 16);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "⚠ DMA buffer clear returned: %s (took %lld ms)", esp_err_to_name(ret), (long long)clear_time);
+    } else {
+        ESP_LOGI(TAG, "✅ DMA buffers cleared (took %lld ms)", (long long)clear_time);
+    }
+    
+    // Start I2S (critical for proper operation)
+    ESP_LOGI(TAG, "[STEP 4/5] Starting I2S peripheral...");
+    start_time = esp_timer_get_time();
+    ret = i2s_start(I2S_AUDIO_NUM);
+    int64_t start_i2s_time = (esp_timer_get_time() - start_time) / 1000;
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ I2S start FAILED: %s (took %lld ms)", esp_err_to_name(ret), (long long)start_i2s_time);
+        i2s_driver_uninstall(I2S_AUDIO_NUM);
+        return ret;
+    }
+    ESP_LOGI(TAG, "✅ I2S peripheral started (took %lld ms)", (long long)start_i2s_time);
+    
+    // CRITICAL: Extended hardware stabilization period
+    ESP_LOGI(TAG, "[STEP 5/5] Hardware stabilization...");
+    ESP_LOGI(TAG, "  Phase 1: Initial settle (50ms)");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    
+    // Verify DMA is ready by attempting a test write
+    ESP_LOGI(TAG, "  Phase 2: DMA verification");
+    uint8_t test_buffer[128] = {0};
+    size_t bytes_written = 0;
+    ret = i2s_write(I2S_AUDIO_NUM, test_buffer, sizeof(test_buffer), &bytes_written, pdMS_TO_TICKS(100));
+    if (ret == ESP_OK && bytes_written > 0) {
+        ESP_LOGI(TAG, "  ✓ DMA TX operational (%zu bytes)", bytes_written);
+    } else {
+        ESP_LOGW(TAG, "  ⚠ DMA TX test: %s (wrote %zu bytes)", esp_err_to_name(ret), bytes_written);
+    }
+    
+    ESP_LOGI(TAG, "  Phase 3: Additional settle (150ms) - CRITICAL for RX");
+    vTaskDelay(pdMS_TO_TICKS(150));
+    
+    // Final diagnostic
+    ESP_LOGI(TAG, "[DIAG] Post-init state:");
+    ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)(esp_timer_get_time() / 1000));
+    ESP_LOGI(TAG, "  Total init time: %lld ms", (long long)(install_time + pin_time + clear_time + start_i2s_time + 200));
+    
+    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "║ ✅ I2S FULL-DUPLEX READY");
+    ESP_LOGI(TAG, "║ Mode: Master TX+RX | Rate: %d Hz | Format: 16-bit mono", CONFIG_AUDIO_SAMPLE_RATE);
+    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
     
     return ESP_OK;
 }
