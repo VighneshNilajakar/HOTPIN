@@ -22,6 +22,9 @@
 #include <string.h>
 #include <limits.h>
 
+#define I2S_DMA_FRAME_MAX 1023U
+#define WRITE_DEBUG_LOG_LIMIT 8U
+
 static const char *TAG = TAG_AUDIO;
 static bool is_initialized = false;
 static uint32_t current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
@@ -190,6 +193,8 @@ esp_err_t audio_driver_deinit(void) {
 }
 
 esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_written, uint32_t timeout_ms) {
+    static uint32_t s_write_log_count = 0;
+
     if (!is_initialized || g_i2s_tx_handle == NULL) {
         ESP_LOGE(TAG, "I2S TX channel not initialized");
         if (bytes_written) *bytes_written = 0;
@@ -249,12 +254,19 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
     }
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S channel write failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "I2S channel write failed: %s (requested=%zu bytes, wrote=%zu)",
+                 esp_err_to_name(ret), size, written);
         return ret;
     }
     
     if (written < size) {
         ESP_LOGW(TAG, "Partial write: %zu/%zu bytes", written, size);
+    }
+
+    if (s_write_log_count < WRITE_DEBUG_LOG_LIMIT || written < size) {
+        ESP_LOGD(TAG, "[WRITE] call=%u requested=%zu bytes wrote=%zu timeout_ms=%lu", (unsigned int)(++s_write_log_count), size, written, (unsigned long)timeout_ms);
+    } else {
+        ++s_write_log_count;
     }
     
     return ESP_OK;
@@ -431,14 +443,29 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     ESP_LOGI(TAG, "[STEP 1/6] Creating I2S channel pair (TX + RX)...");
     ESP_LOGI(TAG, "  Using I2S controller %d for both channels (full-duplex mode)", CONFIG_I2S_STD_PORT);
     
+    const uint32_t requested_frame_num = CONFIG_I2S_DMA_BUF_LEN;
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_I2S_STD_PORT, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = CONFIG_I2S_DMA_BUF_COUNT;
-    chan_cfg.dma_frame_num = CONFIG_I2S_DMA_BUF_LEN;
+    chan_cfg.dma_frame_num = requested_frame_num;
+    if (chan_cfg.dma_frame_num > I2S_DMA_FRAME_MAX) {
+        ESP_LOGW(TAG, "DMA frame num %u exceeds HW limit %u - clamping", (unsigned int)chan_cfg.dma_frame_num, (unsigned int)I2S_DMA_FRAME_MAX);
+        chan_cfg.dma_frame_num = I2S_DMA_FRAME_MAX;
+    }
     chan_cfg.auto_clear = true;  // Auto-clear TX buffer on underflow
     
-    ESP_LOGI(TAG, "  DMA config: %d buffers x %d samples = %d total samples",
-             CONFIG_I2S_DMA_BUF_COUNT, CONFIG_I2S_DMA_BUF_LEN,
-             CONFIG_I2S_DMA_BUF_COUNT * CONFIG_I2S_DMA_BUF_LEN);
+    ESP_LOGI(TAG, "  DMA config request: %u buffers x %u samples (requested = %u)",
+             (unsigned int)CONFIG_I2S_DMA_BUF_COUNT,
+             (unsigned int)requested_frame_num,
+             (unsigned int)(CONFIG_I2S_DMA_BUF_COUNT * requested_frame_num));
+    if (chan_cfg.dma_frame_num != requested_frame_num) {
+        ESP_LOGI(TAG, "  DMA frame num (per desc) clamped to %u", (unsigned int)chan_cfg.dma_frame_num);
+    } else {
+        ESP_LOGI(TAG, "  DMA frame num (per desc): %u", (unsigned int)chan_cfg.dma_frame_num);
+    }
+    ESP_LOGI(TAG, "  DMA total samples (effective): %u",
+             (unsigned int)(CONFIG_I2S_DMA_BUF_COUNT * chan_cfg.dma_frame_num));
+    ESP_LOGI(TAG, "  DMA memory committed: %u bytes (2 bytes/sample)",
+             (unsigned int)(CONFIG_I2S_DMA_BUF_COUNT * chan_cfg.dma_frame_num * sizeof(int16_t)));
     ESP_LOGI(TAG, "  DMA memory: %d bytes (2 bytes/sample)",
              CONFIG_I2S_DMA_BUF_COUNT * CONFIG_I2S_DMA_BUF_LEN * 2);
     
@@ -460,7 +487,7 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     
     i2s_std_config_t tx_std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(CONFIG_AUDIO_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = GPIO_NUM_NC,                    // No MCLK - CRITICAL
             .bclk = CONFIG_I2S_BCLK,                // Bit clock (shared)
@@ -611,7 +638,7 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ ✅ MODERN I2S STD FULL-DUPLEX READY");
     ESP_LOGI(TAG, "║ Driver: i2s_std (NOT legacy!)");
-    ESP_LOGI(TAG, "║ Mode: Master TX+RX | Rate: %d Hz | Format: 16-bit mono", CONFIG_AUDIO_SAMPLE_RATE);
+    ESP_LOGI(TAG, "║ Mode: Master TX+RX | Rate: %d Hz | Format: TX stereo / RX mono", CONFIG_AUDIO_SAMPLE_RATE);
     ESP_LOGI(TAG, "║ This should eliminate LoadStoreError crashes!");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
     

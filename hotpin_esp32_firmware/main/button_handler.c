@@ -5,6 +5,7 @@
 
 #include "button_handler.h"
 #include "config.h"
+#include "event_dispatcher.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "esp_log.h"
@@ -23,11 +24,11 @@
 // ===========================
 static const char *TAG = TAG_BUTTON;
 static TaskHandle_t button_task_handle = NULL;
-static QueueHandle_t button_event_queue = NULL;
 static TimerHandle_t debounce_timer = NULL;
 static TimerHandle_t long_press_timer = NULL;
 static TimerHandle_t double_click_timer = NULL;
 static bool s_isr_service_installed = false;
+static bool s_input_primed = false;
 
 // FSM state
 static button_state_t current_state = BUTTON_STATE_IDLE;
@@ -52,15 +53,13 @@ static uint32_t get_millis(void);
 // Public Functions
 // ===========================
 
-esp_err_t button_handler_init(QueueHandle_t event_queue_handle) {
+esp_err_t button_handler_init(void) {
     ESP_LOGI(TAG, "Initializing button handler on GPIO %d", CONFIG_PUSH_BUTTON_GPIO);
     
-    if (event_queue_handle == NULL) {
-        ESP_LOGE(TAG, "Event queue handle is NULL");
-        return ESP_ERR_INVALID_ARG;
+    if (event_dispatcher_queue() == NULL) {
+        ESP_LOGE(TAG, "Event dispatcher not ready");
+        return ESP_ERR_INVALID_STATE;
     }
-    
-    button_event_queue = event_queue_handle;
     
     // Configure GPIO as input with pull-up
     gpio_config_t io_conf = {
@@ -98,7 +97,7 @@ esp_err_t button_handler_init(QueueHandle_t event_queue_handle) {
         NULL,
         TASK_PRIORITY_BUTTON_HANDLER,
         &button_task_handle,
-        TASK_CORE_PRO  // Core 0 for I/O handling
+        TASK_CORE_AUDIO_IO  // Core 0 for I/O handling
     );
     
     if (task_ret != pdPASS) {
@@ -126,7 +125,15 @@ esp_err_t button_handler_init(QueueHandle_t event_queue_handle) {
         return ret;
     }
     
-    ESP_LOGI(TAG, "Button handler initialized successfully");
+    int initial_level = gpio_get_level(CONFIG_PUSH_BUTTON_GPIO);
+    s_input_primed = (initial_level != 0);
+    current_state = s_input_primed ? BUTTON_STATE_IDLE : BUTTON_STATE_WAIT_RELEASE;
+    if (!s_input_primed) {
+        ESP_LOGW(TAG, "Button input low at init - waiting for release before enabling detection");
+    }
+
+    ESP_LOGI(TAG, "Button handler initialized successfully (initial level=%d, primed=%d)",
+             initial_level, s_input_primed);
     return ESP_OK;
 }
 
@@ -148,6 +155,7 @@ esp_err_t button_handler_deinit(void) {
     }
     
     current_state = BUTTON_STATE_IDLE;
+    s_input_primed = true;
     return ESP_OK;
 }
 
@@ -165,12 +173,17 @@ uint32_t button_handler_get_press_count(void) {
 
 void button_handler_reset(void) {
     ESP_LOGW(TAG, "Resetting button FSM");
-    current_state = BUTTON_STATE_IDLE;
+    int level = gpio_get_level(CONFIG_PUSH_BUTTON_GPIO);
+    s_input_primed = (level != 0);
+    current_state = s_input_primed ? BUTTON_STATE_IDLE : BUTTON_STATE_WAIT_RELEASE;
     click_counter = 0;
     isr_triggered = false;
     xTimerStop(debounce_timer, 0);
     xTimerStop(long_press_timer, 0);
     xTimerStop(double_click_timer, 0);
+    if (!s_input_primed) {
+        ESP_LOGW(TAG, "Button reset while held low - waiting for release to re-prime");
+    }
 }
 
 // ===========================
@@ -208,6 +221,12 @@ static void button_fsm_task(void *pvParameters) {
         // FSM logic
         switch (current_state) {
             case BUTTON_STATE_IDLE:
+                if (!s_input_primed) {
+                    ESP_LOGW(TAG, "Ignoring press while waiting for initial release");
+                    current_state = BUTTON_STATE_WAIT_RELEASE;
+                    break;
+                }
+
                 if (gpio_level == 0) {  // Button pressed
                     current_state = BUTTON_STATE_DEBOUNCE_PRESS;
                     xTimerStart(debounce_timer, 0);
@@ -236,6 +255,11 @@ static void button_fsm_task(void *pvParameters) {
                 
             case BUTTON_STATE_DEBOUNCE_RELEASE:
             case BUTTON_STATE_WAIT_RELEASE:
+                if (current_state == BUTTON_STATE_WAIT_RELEASE && gpio_level == 1) {
+                    s_input_primed = true;
+                    current_state = BUTTON_STATE_IDLE;
+                    ESP_LOGI(TAG, "Button release detected - input primed");
+                }
                 // Wait for debounce timer or state change
                 break;
                 
@@ -306,17 +330,17 @@ static void double_click_timer_callback(TimerHandle_t xTimer) {
 }
 
 static void post_button_event(button_event_type_t event_type, uint32_t duration_ms) {
-    button_event_t event = {
-        .type = event_type,
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_BUTTON_INPUT,
         .timestamp_ms = get_millis(),
-        .duration_ms = duration_ms
+        .data.button = {
+            .type = event_type,
+            .duration_ms = duration_ms,
+        },
     };
-    
-    if (button_event_queue) {
-        BaseType_t ret = xQueueSend(button_event_queue, &event, 0);
-        if (ret != pdTRUE) {
-            ESP_LOGW(TAG, "Failed to post button event (queue full)");
-        }
+
+    if (!event_dispatcher_post(&evt, 0)) {
+        ESP_LOGW(TAG, "Failed to post button event (queue full)");
     }
 }
 

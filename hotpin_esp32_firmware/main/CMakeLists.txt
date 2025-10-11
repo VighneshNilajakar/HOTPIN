@@ -12,6 +12,7 @@ idf_component_register(
         "audio_driver.c"
         "websocket_client.c"
         "state_manager.c"
+    "event_dispatcher.c"
         "stt_pipeline.c"
         "tts_decoder.c"
         "http_client.c"
@@ -53,6 +54,7 @@ set_source_files_properties(
     audio_driver.c
     websocket_client.c
     state_manager.c
+    event_dispatcher.c
     stt_pipeline.c
     tts_decoder.c
     http_client.c

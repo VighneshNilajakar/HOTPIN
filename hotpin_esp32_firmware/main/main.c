@@ -16,7 +16,6 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
@@ -46,6 +45,8 @@
 #include "json_protocol.h"
 #include "led_controller.h"
 #include "serial_commands.h"
+#include "event_dispatcher.h"
+#include "system_events.h"
 
 // ===========================
 // Forward Declarations
@@ -61,8 +62,6 @@ static const char *TAG = TAG_MAIN;
 
 // Synchronization primitives (exported to modules)
 SemaphoreHandle_t g_i2s_config_mutex = NULL;
-QueueHandle_t g_button_event_queue = NULL;
-QueueHandle_t g_state_event_queue = NULL;
 
 // Task handles for coordination
 TaskHandle_t g_state_manager_task_handle = NULL;
@@ -133,12 +132,11 @@ void app_main(void) {
     
     // Create synchronization primitives
     g_i2s_config_mutex = xSemaphoreCreateMutex();
-    g_button_event_queue = xQueueCreate(10, sizeof(button_event_t));
-    g_state_event_queue = xQueueCreate(20, sizeof(state_event_t));
     g_websocket_event_group = xEventGroupCreate();
-    
-    if (!g_i2s_config_mutex || !g_button_event_queue || !g_state_event_queue ||
-        !g_websocket_event_group) {
+    event_dispatcher_init();
+
+    if (!g_i2s_config_mutex || !g_websocket_event_group ||
+        event_dispatcher_queue() == NULL) {
         ESP_LOGE(TAG, "Failed to create synchronization primitives");
         esp_restart();
     }
@@ -160,11 +158,11 @@ void app_main(void) {
     // ===========================
     
     ESP_LOGI(TAG, "Initializing button handler...");
-    ESP_ERROR_CHECK(button_handler_init(g_button_event_queue));
+    ESP_ERROR_CHECK(button_handler_init());
     
     // Initialize serial command interface for debugging
     ESP_LOGI(TAG, "Initializing serial command interface...");
-    ESP_ERROR_CHECK(serial_commands_init(g_button_event_queue));
+    ESP_ERROR_CHECK(serial_commands_init());
     
     ESP_LOGI(TAG, "Initializing LED controller...");
     ESP_ERROR_CHECK(led_controller_init());
@@ -205,7 +203,7 @@ void app_main(void) {
         NULL,
         TASK_PRIORITY_STATE_MANAGER,
         &g_state_manager_task_handle,
-        TASK_CORE_APP
+    TASK_CORE_CONTROL
     );
     
     if (ret != pdPASS) {
@@ -223,7 +221,7 @@ void app_main(void) {
         NULL,
         TASK_PRIORITY_WEBSOCKET - 1,  // Lower priority than main WebSocket I/O
         &g_websocket_task_handle,
-        TASK_CORE_PRO
+    TASK_CORE_NETWORK_IO
     );
     
     if (ret != pdPASS) {
@@ -267,6 +265,14 @@ void app_main(void) {
     ESP_LOGI(TAG, "System initialization complete!");
     ESP_LOGI(TAG, "Entering camera standby mode...");
     ESP_LOGI(TAG, "====================================");
+
+    system_event_t boot_event = {
+        .type = SYSTEM_EVENT_BOOT_COMPLETE,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+    };
+    if (!event_dispatcher_post(&boot_event, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Boot event drop (dispatcher not ready)");
+    }
 
     esp_err_t boot_feedback_ret = feedback_player_play(FEEDBACK_SOUND_BOOT);
     if (boot_feedback_ret != ESP_OK) {
@@ -368,6 +374,18 @@ static esp_err_t init_wifi(void) {
  * @brief Callback for WebSocket connection status changes
  */
 static void websocket_status_callback(websocket_status_t status, void *arg) {
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_WEBSOCKET_STATUS,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+        .data.websocket = {
+            .status = status,
+        },
+    };
+
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "WebSocket status event drop (queue full)");
+    }
+
     switch (status) {
         case WEBSOCKET_STATUS_CONNECTED:
             ESP_LOGI(TAG, "🎉 WebSocket status callback: CONNECTED");

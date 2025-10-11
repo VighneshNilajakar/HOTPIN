@@ -1,0 +1,54 @@
+PS F:\Documents\College\6th Semester\Project\ESP_Warp> python main.py
+INFO:     Started server process [16088]
+INFO:     Waiting for application startup.
+
+============================================================
+🚀 Hotpin Prototype Server Starting...
+============================================================
+
+📡 Network Information:
+   WiFi Network: wifi
+   IP Address: 10.140.180.58
+   Interface: WiFi
+   Server URL: http://10.140.180.58:8000
+   WebSocket URL: ws://10.140.180.58:8000/ws
+
+✓ Groq AsyncClient initialized with model: openai/gpt-oss-20b
+Loading Vosk model from: ./model
+LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=10 max-active=3000 lattice-beam=2
+LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:6:7:8:9:10
+LOG (VoskAPI:RemoveOrphanNodes():nnet-nnet.cc:948) Removed 1 orphan nodes.
+LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 2 orphan components.
+LOG (VoskAPI:Collapse():nnet-utils.cc:1488) Added 1 components, removed 2      
+LOG (VoskAPI:ReadDataFiles():model.cc:248) Loading i-vector extractor from ./model/ivector/final.ie
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:183) Computing derived variables for iVector extractor
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:204) Done.
+LOG (VoskAPI:ReadDataFiles():model.cc:282) Loading HCL and G from ./model/graph/HCLr.fst ./model/graph/Gr.fst
+LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo ./model/graph/phones/word_boundary.int
+✓ Vosk model loaded successfully
+   Model: ./model
+   Format: 16000Hz, 1 channel, 16-bit
+✓ pyttsx3 TTS engine test successful
+============================================================
+✓ Server ready at ws://0.0.0.0:8000/ws
+============================================================
+
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)        
+INFO:     10.140.180.214:64802 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed
+INFO:     10.140.180.214:51385 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin
+📷 [hotpin-998C64-18] Image received: image.jpg, 9655 bytes (9.43 KB)
+💾 [hotpin-998C64-18] Image saved: captured_images/hotpin-998C64-18_20251012_034230.jpg
+INFO:     10.140.180.214:51386 - "POST /image HTTP/1.1" 200 OK
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed

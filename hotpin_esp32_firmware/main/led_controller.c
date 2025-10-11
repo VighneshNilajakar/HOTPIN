@@ -102,7 +102,7 @@ esp_err_t led_controller_init(void) {
 		NULL,
 		1,
 		&s_led_task,
-		TASK_CORE_PRO
+		TASK_CORE_AUDIO_IO
 	);
 
 	if (task_ret != pdPASS) {

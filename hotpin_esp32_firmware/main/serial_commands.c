@@ -6,13 +6,13 @@
 #include "serial_commands.h"
 #include "button_handler.h"
 #include "config.h"
+#include "event_dispatcher.h"
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "esp_timer.h"
 #include <string.h>
 
 static const char *TAG = "SERIAL_CMD";
-static QueueHandle_t g_button_queue = NULL;
 static TaskHandle_t g_serial_task_handle = NULL;
 static bool g_running = false;
 
@@ -55,16 +55,19 @@ static void serial_command_task(void *pvParameters) {
                 cmd = cmd + ('a' - 'A');
             }
             
-            button_event_t event;
-            event.timestamp_ms = esp_timer_get_time() / 1000;
-            
+            system_event_t evt = {
+                .type = SYSTEM_EVENT_BUTTON_INPUT,
+                .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+            };
+
             switch (cmd) {
                 case 's':
                     // Toggle voice mode (simulate single click)
                     voice_active = !voice_active;
-                    event.type = BUTTON_EVENT_SINGLE_CLICK;
-                    
-                    if (xQueueSend(g_button_queue, &event, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    evt.data.button.type = BUTTON_EVENT_SINGLE_CLICK;
+                    evt.data.button.duration_ms = 0;
+
+                    if (event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
                         if (voice_active) {
                             printf("📢 Voice mode STARTED (recording...)\n");
                             ESP_LOGI(TAG, "Simulated SHORT PRESS - Voice START");
@@ -79,9 +82,10 @@ static void serial_command_task(void *pvParameters) {
                     
                 case 'c':
                     // Capture image (simulate double click)
-                    event.type = BUTTON_EVENT_DOUBLE_CLICK;
-                    
-                    if (xQueueSend(g_button_queue, &event, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    evt.data.button.type = BUTTON_EVENT_DOUBLE_CLICK;
+                    evt.data.button.duration_ms = 0;
+
+                    if (event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
                         printf("📷 Image capture triggered!\n");
                         ESP_LOGI(TAG, "Simulated DOUBLE CLICK - Camera capture");
                     } else {
@@ -91,9 +95,10 @@ static void serial_command_task(void *pvParameters) {
                     
                 case 'l':
                     // Long press (simulate shutdown)
-                    event.type = BUTTON_EVENT_LONG_PRESS;
-                    
-                    if (xQueueSend(g_button_queue, &event, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    evt.data.button.type = BUTTON_EVENT_LONG_PRESS;
+                    evt.data.button.duration_ms = 0;
+
+                    if (event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
                         printf("🔴 Long press - Shutdown simulated\n");
                         ESP_LOGI(TAG, "Simulated LONG PRESS - Shutdown");
                     } else {
@@ -132,16 +137,14 @@ static void serial_command_task(void *pvParameters) {
     vTaskDelete(NULL);
 }
 
-esp_err_t serial_commands_init(QueueHandle_t button_queue) {
-    if (button_queue == NULL) {
-        ESP_LOGE(TAG, "Invalid button queue");
-        return ESP_ERR_INVALID_ARG;
+esp_err_t serial_commands_init(void) {
+    if (event_dispatcher_queue() == NULL) {
+        ESP_LOGE(TAG, "Event dispatcher queue not ready");
+        return ESP_ERR_INVALID_STATE;
     }
-    
+
     ESP_LOGI(TAG, "Initializing serial command interface...");
-    
-    g_button_queue = button_queue;
-    
+
     // Configure UART (usually already configured by bootloader, but ensure settings)
     uart_config_t uart_config = {
         .baud_rate = 115200,
@@ -175,7 +178,7 @@ esp_err_t serial_commands_init(QueueHandle_t button_queue) {
         NULL,
         TASK_PRIORITY_BUTTON_FSM,  // Same priority as button handler
         &g_serial_task_handle,
-        TASK_CORE_PRO  // Core 0 - I/O operations
+        TASK_CORE_AUDIO_IO  // Core 0 - I/O operations
     );
     
     if (task_ret != pdPASS) {

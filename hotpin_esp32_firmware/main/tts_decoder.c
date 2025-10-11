@@ -14,13 +14,17 @@
 #include "audio_driver.h"
 #include "audio_feedback.h"
 #include "websocket_client.h"
+#include "event_dispatcher.h"
+#include "system_events.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "esp_timer.h"
 #include <string.h>
+#include <stdint.h>
 
 static const char *TAG = TAG_TTS;
 
@@ -75,6 +79,7 @@ static void tts_playback_task(void *pvParameters);
 static esp_err_t parse_wav_header(const uint8_t *buffer, size_t length, size_t *header_consumed);
 static void print_wav_info(const wav_runtime_info_t *info);
 static void audio_data_callback(const uint8_t *data, size_t len, void *arg);
+static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, size_t *accounted_bytes);
 
 // ===========================
 // Public Functions
@@ -174,7 +179,7 @@ esp_err_t tts_decoder_start(void) {
         NULL,
         TASK_PRIORITY_TTS_DECODER,
         &g_playback_task_handle,
-        0  // Core 0 - CRITICAL: Co-locate with Wi-Fi and I2S RX to prevent DMA corruption
+        TASK_CORE_AUDIO_IO  // Core 0 - CRITICAL: Co-locate with Wi-Fi and I2S RX to prevent DMA corruption
     );
     
     if (ret != pdPASS) {
@@ -190,6 +195,14 @@ esp_err_t tts_decoder_start(void) {
     is_running = true;
     is_playing = true;
     
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_TTS_PLAYBACK_STARTED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+    };
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue TTS playback start event");
+    }
+
     ESP_LOGI(TAG, "✅ TTS decoder started");
     return ESP_OK;
 }
@@ -307,6 +320,7 @@ static void tts_playback_task(void *pvParameters) {
     ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
     
     audio_chunk_t chunk;
+    esp_err_t playback_result = ESP_OK;
     
     while (true) {
         // Wait for audio chunk
@@ -323,6 +337,7 @@ static void tts_playback_task(void *pvParameters) {
                     ESP_LOGE(TAG, "Header staging buffer overflow (%zu + %zu)",
                              header_bytes_received, chunk.length);
                     is_running = false;
+                    playback_result = ESP_ERR_INVALID_SIZE;
                 } else {
                     memcpy(header_buffer + header_bytes_received, chunk.data, chunk.length);
                     header_bytes_received += chunk.length;
@@ -351,15 +366,14 @@ static void tts_playback_task(void *pvParameters) {
 
                         size_t pcm_len = header_bytes_received - header_consumed;
                         if (pcm_len > 0) {
-                            size_t bytes_written = 0;
-                            esp_err_t write_ret = audio_driver_write(header_buffer + header_consumed,
-                                                                     pcm_len,
-                                                                     &bytes_written,
-                                                                     portMAX_DELAY);
+                            size_t accounted = 0;
+                            esp_err_t write_ret = write_pcm_chunk_to_driver(header_buffer + header_consumed,
+                                                                           pcm_len,
+                                                                           &accounted);
                             if (write_ret == ESP_OK) {
-                                pcm_bytes_played += bytes_written;
+                                pcm_bytes_played += accounted;
                                 ESP_LOGD(TAG, "Played %zu bytes from initial chunk (total: %zu)",
-                                         bytes_written, pcm_bytes_played);
+                                         accounted, pcm_bytes_played);
                             } else {
                                 ESP_LOGE(TAG, "Initial PCM write failed: %s", esp_err_to_name(write_ret));
                             }
@@ -371,6 +385,7 @@ static void tts_playback_task(void *pvParameters) {
                     } else {
                         ESP_LOGE(TAG, "Failed to parse WAV header: %s", esp_err_to_name(ret));
                         is_running = false;
+                        playback_result = ret;
                     }
                 }
 
@@ -389,17 +404,19 @@ static void tts_playback_task(void *pvParameters) {
                     playback_feedback_sent = true;
                 }
 
-                size_t bytes_written = 0;
-                esp_err_t ret = audio_driver_write(chunk.data, chunk.length, 
-                                                     &bytes_written, portMAX_DELAY);
+                size_t accounted = 0;
+                esp_err_t ret = write_pcm_chunk_to_driver(chunk.data, chunk.length,
+                                                          &accounted);
                 
                 if (ret == ESP_OK) {
-                    pcm_bytes_played += bytes_written;
+                    pcm_bytes_played += accounted;
                     UBaseType_t queued = (g_audio_queue != NULL) ? uxQueueMessagesWaiting(g_audio_queue) : 0;
                     ESP_LOGD(TAG, "Played %zu bytes (total: %zu, queue depth: %u)",
-                             bytes_written, pcm_bytes_played, (unsigned int)queued);
+                             accounted, pcm_bytes_played, (unsigned int)queued);
                 } else {
                     ESP_LOGE(TAG, "Audio playback error: %s", esp_err_to_name(ret));
+                    playback_result = ret;
+                    is_running = false;
                 }
             }
             
@@ -451,11 +468,108 @@ static void tts_playback_task(void *pvParameters) {
         }
     }
 
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_TTS_PLAYBACK_FINISHED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+        .data.tts = {
+            .result = playback_result,
+        },
+    };
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue TTS playback finished event: %s",
+                 esp_err_to_name(playback_result));
+    }
+
     ESP_LOGI(TAG, "TTS playback task stopped");
     if (g_playback_task_handle == xTaskGetCurrentTaskHandle()) {
         g_playback_task_handle = NULL;
     }
     vTaskDelete(NULL);
+}
+
+static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, size_t *accounted_bytes) {
+    static uint32_t s_duplication_logs = 0;
+    static uint32_t s_passthrough_logs = 0;
+    if (accounted_bytes) {
+        *accounted_bytes = 0;
+    }
+
+    if (data == NULL || length == 0) {
+        return ESP_OK;
+    }
+
+    size_t accounted = length;
+    bool duplicate_to_stereo = false;
+
+    if (header_parsed && wav_info.num_channels == 1 && wav_info.bits_per_sample == 16) {
+        if ((length % sizeof(int16_t)) != 0) {
+            ESP_LOGW(TAG, "Mono chunk size %zu not aligned to 16-bit samples - writing raw", length);
+        } else {
+            duplicate_to_stereo = true;
+        }
+    } else if (header_parsed && wav_info.num_channels == 1 && wav_info.bits_per_sample != 16) {
+        ESP_LOGW(TAG, "Mono WAV with %u-bit samples not supported for duplication - writing raw",
+                 (unsigned int)wav_info.bits_per_sample);
+    }
+
+    if (duplicate_to_stereo) {
+        size_t sample_count = length / sizeof(int16_t);
+        size_t stereo_bytes = sample_count * sizeof(int16_t) * 2;
+
+        if (s_duplication_logs < 6) {
+            ESP_LOGD(TAG, "[PCM DUP] %zu mono samples -> %zu stereo bytes", sample_count, stereo_bytes);
+            s_duplication_logs++;
+        }
+
+        uint8_t *stereo_buf = heap_caps_aligned_alloc(4, stereo_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (stereo_buf == NULL) {
+            ESP_LOGW(TAG, "Stereo duplication aligned alloc failed (%zu bytes) - attempting fallback", stereo_bytes);
+            stereo_buf = heap_caps_malloc(stereo_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+
+        if (stereo_buf == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate stereo duplication buffer (%zu bytes)", stereo_bytes);
+            return ESP_ERR_NO_MEM;
+        }
+
+        int16_t *dst = (int16_t *)stereo_buf;
+        const int16_t *src = (const int16_t *)data;
+        for (size_t i = 0; i < sample_count; ++i) {
+            int16_t sample = src[i];
+            dst[2 * i] = sample;
+            dst[2 * i + 1] = sample;
+        }
+
+        size_t written = 0;
+        esp_err_t ret = audio_driver_write(stereo_buf, stereo_bytes, &written, portMAX_DELAY);
+        heap_caps_free(stereo_buf);
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Stereo duplication write failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+
+        if (accounted_bytes) {
+            *accounted_bytes = accounted;
+        }
+        return ESP_OK;
+    }
+
+    size_t written = 0;
+    esp_err_t ret = audio_driver_write(data, length, &written, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    if (s_passthrough_logs < 6) {
+        ESP_LOGD(TAG, "[PCM PASS] Wrote %zu raw bytes", length);
+        s_passthrough_logs++;
+    }
+
+    if (accounted_bytes) {
+        *accounted_bytes = accounted;
+    }
+    return ESP_OK;
 }
 
 static inline uint16_t read_le16(const uint8_t *ptr) {

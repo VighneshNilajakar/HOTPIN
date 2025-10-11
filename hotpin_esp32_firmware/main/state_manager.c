@@ -19,6 +19,8 @@
 #include "http_client.h"
 #include "json_protocol.h"
 #include "led_controller.h"
+#include "event_dispatcher.h"
+#include "system_events.h"
 #include "esp_camera.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
@@ -32,10 +34,10 @@
 static const char *TAG = TAG_STATE_MGR;
 static system_state_t current_state = SYSTEM_STATE_INIT;
 static system_state_t previous_state = SYSTEM_STATE_INIT;
+static uint32_t s_mode_switch_count = 0;
+static websocket_pipeline_stage_t s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 
-// External globals from main.c
-extern QueueHandle_t g_button_event_queue;
-extern QueueHandle_t g_state_event_queue;
+// External synchronization primitive
 extern SemaphoreHandle_t g_i2s_config_mutex;
 extern void websocket_connection_request_shutdown(void);
 
@@ -61,6 +63,14 @@ static void handle_error_state(void);
 static const char* state_to_string(system_state_t state);
 static void wait_for_voice_pipeline_shutdown(void);
 static esp_err_t capture_and_upload_image(void);
+static void process_button_event(const button_event_payload_t *button_event);
+static void process_websocket_status(websocket_status_t status);
+static void execute_capture_sequence(void);
+static void handle_pipeline_stage_event(websocket_pipeline_stage_t stage);
+static void handle_stt_started(void);
+static void handle_stt_stopped(void);
+static void handle_tts_playback_started(void);
+static void handle_tts_playback_finished(esp_err_t result);
 
 // ===========================
 // Public Functions
@@ -83,80 +93,65 @@ void state_manager_task(void *pvParameters) {
         current_state = SYSTEM_STATE_ERROR;
     }
     
-    button_event_t button_event;
-    uint32_t mode_switch_count = 0;
-    esp_err_t ret;
+    QueueHandle_t event_queue = event_dispatcher_queue();
+    while (event_queue == NULL) {
+        ESP_LOGW(TAG, "Waiting for event dispatcher queue...");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        event_queue = event_dispatcher_queue();
+    }
+
+    system_event_t incoming_event;
     
     while (1) {
         // Reset watchdog timer
         esp_task_wdt_reset();
         
-        // Wait for button events with timeout
-        if (xQueueReceive(g_button_event_queue, &button_event, pdMS_TO_TICKS(100)) == pdTRUE) {
-            ESP_LOGI(TAG, "Button event received: %d in state %s", 
-                     button_event.type, state_to_string(current_state));
-            
-            // Only process events in stable states
-            if (current_state != SYSTEM_STATE_TRANSITIONING) {
-                switch (button_event.type) {
-                    case BUTTON_EVENT_SINGLE_CLICK:
-                        ESP_LOGI(TAG, "Single click - mode toggle requested");
-                        mode_switch_count++;
-                        
-                        if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
-                            ESP_LOGI(TAG, "Switching: Camera → Voice (count: %u)", (unsigned int)mode_switch_count);
-                            previous_state = current_state;
-                            current_state = SYSTEM_STATE_TRANSITIONING;
-                            
-                            if (transition_to_voice_mode() == ESP_OK) {
-                                current_state = SYSTEM_STATE_VOICE_ACTIVE;
-                                ESP_LOGI(TAG, "✅ Entered VOICE_ACTIVE state");
-                            } else {
-                                ESP_LOGE(TAG, "❌ Voice mode transition failed");
-                                current_state = SYSTEM_STATE_ERROR;
-                            }
-                            
-                        } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-                            ESP_LOGI(TAG, "Switching: Voice → Camera (count: %u)", (unsigned int)mode_switch_count);
-                            previous_state = current_state;
-                            current_state = SYSTEM_STATE_TRANSITIONING;
-                            
-                            if (transition_to_camera_mode() == ESP_OK) {
-                                current_state = SYSTEM_STATE_CAMERA_STANDBY;
-                                ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
-                            } else {
-                                ESP_LOGE(TAG, "❌ Camera mode transition failed");
-                                current_state = SYSTEM_STATE_ERROR;
-                            }
-                        }
-                        break;
-                        
-                    case BUTTON_EVENT_DOUBLE_CLICK:
-                        ESP_LOGI(TAG, "Double-click detected - triggering camera capture");
-
-                        ret = handle_camera_capture();
-                        if (ret != ESP_OK) {
-                            ESP_LOGE(TAG, "Camera capture sequence failed");
-                            led_controller_set_state(LED_STATE_SOS);
-                            vTaskDelay(pdMS_TO_TICKS(2000));
-                            led_state_t recovery_state =
-                                (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
-                                LED_STATE_SOLID : LED_STATE_BREATHING;
-                            led_controller_set_state(recovery_state);
-                        }
-                        break;
-                        
-                    case BUTTON_EVENT_LONG_PRESS:
-                        ESP_LOGW(TAG, "Long press - shutdown requested");
-                        current_state = SYSTEM_STATE_SHUTDOWN;
-                        break;
-                        
-                    default:
-                        ESP_LOGW(TAG, "Unknown button event: %d", button_event.type);
-                        break;
-                }
-            } else {
-                ESP_LOGW(TAG, "Button event ignored - system transitioning");
+        if (xQueueReceive(event_queue, &incoming_event, pdMS_TO_TICKS(100)) == pdTRUE) {
+            switch (incoming_event.type) {
+                case SYSTEM_EVENT_BUTTON_INPUT:
+                    process_button_event(&incoming_event.data.button);
+                    break;
+                case SYSTEM_EVENT_WEBSOCKET_STATUS:
+                    process_websocket_status(incoming_event.data.websocket.status);
+                    break;
+                case SYSTEM_EVENT_CAPTURE_REQUEST:
+                    ESP_LOGI(TAG, "Capture request received via event queue");
+                    execute_capture_sequence();
+                    break;
+                case SYSTEM_EVENT_CAPTURE_COMPLETE:
+                    ESP_LOGI(TAG, "Capture complete event: success=%d (%s)",
+                             incoming_event.data.capture.success,
+                             esp_err_to_name(incoming_event.data.capture.result));
+                    break;
+                case SYSTEM_EVENT_SHUTDOWN_REQUEST:
+                    ESP_LOGW(TAG, "Shutdown requested via event queue");
+                    current_state = SYSTEM_STATE_SHUTDOWN;
+                    break;
+                case SYSTEM_EVENT_ERROR_SIGNAL:
+                    ESP_LOGE(TAG, "Error event received (code=%s)",
+                             esp_err_to_name(incoming_event.data.error.code));
+                    current_state = SYSTEM_STATE_ERROR;
+                    break;
+                case SYSTEM_EVENT_STT_STARTED:
+                    handle_stt_started();
+                    break;
+                case SYSTEM_EVENT_STT_STOPPED:
+                    handle_stt_stopped();
+                    break;
+                case SYSTEM_EVENT_TTS_PLAYBACK_STARTED:
+                    handle_tts_playback_started();
+                    break;
+                case SYSTEM_EVENT_TTS_PLAYBACK_FINISHED:
+                    handle_tts_playback_finished(incoming_event.data.tts.result);
+                    break;
+                case SYSTEM_EVENT_PIPELINE_STAGE:
+                    handle_pipeline_stage_event(incoming_event.data.pipeline.stage);
+                    break;
+                case SYSTEM_EVENT_BOOT_COMPLETE:
+                case SYSTEM_EVENT_NONE:
+                default:
+                    // No action required for these events yet
+                    break;
             }
         }
         
@@ -202,27 +197,183 @@ system_state_t state_manager_get_state(void) {
     return current_state;
 }
 
-esp_err_t state_manager_request_transition(system_state_t new_state) {
-    ESP_LOGI(TAG, "State transition requested: %s -> %s", 
-             state_to_string(current_state), state_to_string(new_state));
-    
-    // Validate transition
+static void process_button_event(const button_event_payload_t *button_event)
+{
+    if (button_event == NULL) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Button event received: %d in state %s",
+             button_event->type, state_to_string(current_state));
+
     if (current_state == SYSTEM_STATE_TRANSITIONING) {
-        ESP_LOGW(TAG, "Cannot transition - already transitioning");
-        return ESP_ERR_INVALID_STATE;
+        ESP_LOGW(TAG, "Button event ignored - system transitioning");
+        return;
     }
-    
-    // Post transition request to queue
-    state_event_t event = {
-        .type = STATE_EVENT_MODE_SWITCH_COMPLETE,
-        .timestamp_ms = xTaskGetTickCount() * portTICK_PERIOD_MS
-    };
-    
-    if (g_state_event_queue != NULL) {
-        xQueueSend(g_state_event_queue, &event, pdMS_TO_TICKS(100));
+
+    switch (button_event->type) {
+        case BUTTON_EVENT_SINGLE_CLICK:
+            ESP_LOGI(TAG, "Single click - mode toggle requested");
+            s_mode_switch_count++;
+
+            if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
+                ESP_LOGI(TAG, "Switching: Camera → Voice (count: %u)",
+                         (unsigned int)s_mode_switch_count);
+                previous_state = current_state;
+                current_state = SYSTEM_STATE_TRANSITIONING;
+
+                if (transition_to_voice_mode() == ESP_OK) {
+                    current_state = SYSTEM_STATE_VOICE_ACTIVE;
+                    ESP_LOGI(TAG, "✅ Entered VOICE_ACTIVE state");
+                } else {
+                    ESP_LOGE(TAG, "❌ Voice mode transition failed");
+                    current_state = SYSTEM_STATE_ERROR;
+                }
+
+            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                ESP_LOGI(TAG, "Switching: Voice → Camera (count: %u)",
+                         (unsigned int)s_mode_switch_count);
+                previous_state = current_state;
+                current_state = SYSTEM_STATE_TRANSITIONING;
+
+                if (transition_to_camera_mode() == ESP_OK) {
+                    current_state = SYSTEM_STATE_CAMERA_STANDBY;
+                    ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
+                } else {
+                    ESP_LOGE(TAG, "❌ Camera mode transition failed");
+                    current_state = SYSTEM_STATE_ERROR;
+                }
+            } else {
+                ESP_LOGW(TAG, "Single click received in state %s - no action",
+                         state_to_string(current_state));
+            }
+            break;
+
+        case BUTTON_EVENT_DOUBLE_CLICK:
+            ESP_LOGI(TAG, "Double-click detected - triggering capture sequence");
+            execute_capture_sequence();
+            break;
+
+        case BUTTON_EVENT_LONG_PRESS:
+            ESP_LOGW(TAG, "Long press - shutdown requested");
+            current_state = SYSTEM_STATE_SHUTDOWN;
+            break;
+
+        case BUTTON_EVENT_LONG_PRESS_RELEASE:
+            ESP_LOGI(TAG, "Long press released after %u ms",
+                     (unsigned int)button_event->duration_ms);
+            break;
+
+        case BUTTON_EVENT_NONE:
+        default:
+            ESP_LOGW(TAG, "Unhandled button event type: %d", button_event->type);
+            break;
     }
-    
-    return ESP_OK;
+}
+
+static void execute_capture_sequence(void)
+{
+    esp_err_t ret = handle_camera_capture();
+    if (ret == ESP_OK) {
+        return;
+    }
+
+    ESP_LOGE(TAG, "Camera capture sequence failed (%s)", esp_err_to_name(ret));
+    led_controller_set_state(LED_STATE_SOS);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    led_state_t recovery_state =
+        (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
+        LED_STATE_SOLID : LED_STATE_BREATHING;
+    led_controller_set_state(recovery_state);
+}
+
+static void process_websocket_status(websocket_status_t status)
+{
+    switch (status) {
+        case WEBSOCKET_STATUS_CONNECTED:
+            ESP_LOGI(TAG, "WebSocket connected");
+            if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
+                led_controller_set_state(LED_STATE_BREATHING);
+            }
+            break;
+        case WEBSOCKET_STATUS_DISCONNECTED:
+            ESP_LOGW(TAG, "WebSocket disconnected");
+            led_controller_set_state(LED_STATE_PULSING);
+            break;
+        case WEBSOCKET_STATUS_ERROR:
+            ESP_LOGE(TAG, "WebSocket error signalled");
+            led_controller_set_state(LED_STATE_SOS);
+            break;
+        default:
+            break;
+    }
+}
+
+static void handle_pipeline_stage_event(websocket_pipeline_stage_t stage)
+{
+    s_pipeline_stage = stage;
+    ESP_LOGI(TAG, "Pipeline stage event: %s",
+             websocket_client_pipeline_stage_to_string(stage));
+
+    if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
+        return;
+    }
+
+    switch (stage) {
+        case WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION:
+        case WEBSOCKET_PIPELINE_STAGE_LLM:
+            led_controller_set_state(LED_STATE_PULSING);
+            break;
+        case WEBSOCKET_PIPELINE_STAGE_TTS:
+            led_controller_set_state(LED_STATE_SOLID);
+            break;
+        case WEBSOCKET_PIPELINE_STAGE_COMPLETE:
+            tts_decoder_notify_end_of_stream();
+            led_controller_set_state(LED_STATE_SOLID);
+            break;
+        case WEBSOCKET_PIPELINE_STAGE_IDLE:
+            led_controller_set_state(LED_STATE_SOLID);
+            break;
+        default:
+            break;
+    }
+}
+
+static void handle_stt_started(void)
+{
+    ESP_LOGI(TAG, "STT pipeline reported start");
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        led_controller_set_state(LED_STATE_SOLID);
+    }
+}
+
+static void handle_stt_stopped(void)
+{
+    ESP_LOGI(TAG, "STT pipeline reported stop");
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        led_controller_set_state(LED_STATE_SOLID);
+    }
+}
+
+static void handle_tts_playback_started(void)
+{
+    ESP_LOGI(TAG, "TTS playback start event received");
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        led_controller_set_state(LED_STATE_SOLID);
+    }
+}
+
+static void handle_tts_playback_finished(esp_err_t result)
+{
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "TTS playback finished successfully");
+    } else {
+        ESP_LOGE(TAG, "TTS playback finished with error: %s", esp_err_to_name(result));
+    }
+
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        led_controller_set_state(LED_STATE_SOLID);
+    }
 }
 
 // ===========================
@@ -381,6 +532,18 @@ static esp_err_t capture_and_upload_image(void) {
         ESP_LOGI(TAG, "Image uploaded successfully");
     } else {
         ESP_LOGE(TAG, "Image upload failed: %s", esp_err_to_name(ret));
+    }
+
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_CAPTURE_COMPLETE,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+        .data.capture = {
+            .success = (ret == ESP_OK),
+            .result = ret,
+        },
+    };
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue capture completion event");
     }
 
     return ret;

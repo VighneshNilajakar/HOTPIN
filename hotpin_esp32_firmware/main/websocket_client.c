@@ -13,9 +13,9 @@
 
 #include "websocket_client.h"
 #include "config.h"
-#include "tts_decoder.h"
-#include "led_controller.h"
-#include "state_manager.h"
+#include "event_dispatcher.h"
+#include "system_events.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
 #include "cJSON.h"
@@ -48,6 +48,7 @@ static void handle_text_message(const char *data, size_t len);
 static void handle_binary_message(const uint8_t *data, size_t len);
 static void update_pipeline_stage(const char *status, const char *stage);
 static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage);
+static void post_pipeline_stage_event(websocket_pipeline_stage_t stage);
 
 // ===========================
 // Public Functions
@@ -461,35 +462,18 @@ static void update_pipeline_stage(const char *status, const char *stage) {
     }
 
     websocket_pipeline_stage_t new_stage = g_pipeline_stage;
-    bool notify_eos = false;
-    bool voice_active = (state_manager_get_state() == SYSTEM_STATE_VOICE_ACTIVE);
 
     if (strcmp(status, "complete") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_COMPLETE;
-        notify_eos = true;
-        if (voice_active) {
-            led_controller_set_state(LED_STATE_SOLID);
-        }
     } else if (strcmp(status, "processing") == 0) {
         if (stage != NULL) {
             if (strcmp(stage, "transcription") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
-                if (voice_active) {
-                    led_controller_set_state(LED_STATE_PULSING);
-                }
             } else if (strcmp(stage, "llm") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_LLM;
-                if (voice_active) {
-                    led_controller_set_state(LED_STATE_PULSING);
-                }
             } else if (strcmp(stage, "tts") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TTS;
-                if (voice_active) {
-                    led_controller_set_state(LED_STATE_SOLID);
-                }
             }
-        } else if (voice_active) {
-            led_controller_set_state(LED_STATE_PULSING);
         }
     } else if (strcmp(status, "idle") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
@@ -500,10 +484,7 @@ static void update_pipeline_stage(const char *status, const char *stage) {
                  pipeline_stage_to_string(g_pipeline_stage),
                  pipeline_stage_to_string(new_stage));
         g_pipeline_stage = new_stage;
-    }
-
-    if (notify_eos) {
-        tts_decoder_notify_end_of_stream();
+        post_pipeline_stage_event(new_stage);
     }
 }
 
@@ -521,6 +502,22 @@ static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
             return "complete";
         default:
             return "unknown";
+    }
+}
+
+static void post_pipeline_stage_event(websocket_pipeline_stage_t stage)
+{
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_PIPELINE_STAGE,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+        .data.pipeline = {
+            .stage = stage,
+        },
+    };
+
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue pipeline stage event (%s)",
+                 pipeline_stage_to_string(stage));
     }
 }
 

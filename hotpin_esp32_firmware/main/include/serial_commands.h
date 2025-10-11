@@ -10,16 +10,13 @@
 #define SERIAL_COMMANDS_H
 
 #include "esp_err.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 
 /**
  * @brief Initialize serial command handler
- * 
- * @param button_queue Queue to send button events to
+ *
  * @return ESP_OK on success
  */
-esp_err_t serial_commands_init(QueueHandle_t button_queue);
+esp_err_t serial_commands_init(void);
 
 /**
  * @brief Deinitialize serial command handler

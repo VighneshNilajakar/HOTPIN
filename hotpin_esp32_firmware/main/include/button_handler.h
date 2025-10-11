@@ -7,7 +7,7 @@
  * - Software debouncing (50ms)
  * - Single-click detection (deferred until double-click window expires)
  * - Long-press detection (>3000ms)
- * - Event queue for state manager communication
+ * - Event dispatcher integration for state manager communication
  */
 
 #ifndef BUTTON_HANDLER_H
@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
+#include "system_events.h"
 
 // ===========================
 // Button FSM States
@@ -32,38 +33,17 @@ typedef enum {
 } button_state_t;
 
 // ===========================
-// Button Event Types
-// ===========================
-typedef enum {
-    BUTTON_EVENT_NONE = 0,
-    BUTTON_EVENT_SINGLE_CLICK,       // Single click confirmed
-    BUTTON_EVENT_DOUBLE_CLICK,       // Double click detected
-    BUTTON_EVENT_LONG_PRESS,         // Long press (>3000ms)
-    BUTTON_EVENT_LONG_PRESS_RELEASE  // Long press released
-} button_event_type_t;
-
-// ===========================
-// Button Event Structure
-// ===========================
-typedef struct {
-    button_event_type_t type;
-    uint32_t timestamp_ms;           // Event timestamp
-    uint32_t duration_ms;            // Press duration (for long press)
-} button_event_t;
-
-// ===========================
 // Public API
 // ===========================
 
 /**
  * @brief Initialize button handler
  * 
- * Configures GPIO interrupt, creates FSM task, and sets up event queue
+ * Configures GPIO interrupt, creates FSM task, and binds to system event dispatcher
  * 
- * @param event_queue_handle FreeRTOS queue for posting button events
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t button_handler_init(QueueHandle_t event_queue_handle);
+esp_err_t button_handler_init(void);
 
 /**
  * @brief Deinitialize button handler

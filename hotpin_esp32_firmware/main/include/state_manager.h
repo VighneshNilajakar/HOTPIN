@@ -9,7 +9,6 @@
 #define STATE_MANAGER_H
 
 #include "esp_err.h"
-#include "button_handler.h"
 #include <stdint.h>
 
 // ===========================
@@ -23,22 +22,6 @@ typedef enum {
     SYSTEM_STATE_ERROR,
     SYSTEM_STATE_SHUTDOWN
 } system_state_t;
-
-// ===========================
-// State Events
-// ===========================
-typedef enum {
-    STATE_EVENT_BUTTON_PRESS,
-    STATE_EVENT_MODE_SWITCH_COMPLETE,
-    STATE_EVENT_ERROR,
-    STATE_EVENT_SHUTDOWN_REQUEST
-} state_event_type_t;
-
-typedef struct {
-    state_event_type_t type;
-    button_event_t button_event;  // Valid if type == STATE_EVENT_BUTTON_PRESS
-    uint32_t timestamp_ms;
-} state_event_t;
 
 // ===========================
 // Public API
@@ -59,13 +42,5 @@ void state_manager_task(void *pvParameters);
  * @return Current system state
  */
 system_state_t state_manager_get_state(void);
-
-/**
- * @brief Request state transition
- * 
- * @param new_state Desired system state
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t state_manager_request_transition(system_state_t new_state);
 
 #endif // STATE_MANAGER_H

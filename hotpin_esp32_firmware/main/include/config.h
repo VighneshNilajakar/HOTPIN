@@ -91,7 +91,7 @@
 // FINAL FIX: Optimized to reduce DMA-capable RAM pressure while maintaining throughput
 // Strategy: Fewer descriptors (less metadata overhead) + Larger buffers (maintain performance)
 #define CONFIG_I2S_DMA_BUF_COUNT            4               // Number of DMA descriptors (was 16, reduced to 4 to lower memory pressure)
-#define CONFIG_I2S_DMA_BUF_LEN              1200            // Samples per buffer (was 512, increased to 1200 for sustained throughput)
+#define CONFIG_I2S_DMA_BUF_LEN              1020            // Samples per buffer (<=1023 HW limit, keeps high throughput)
 
 // I2S controller assignment
 #define CONFIG_I2S_STD_PORT                 I2S_NUM_1       // Dedicated audio controller (avoids camera conflict)
@@ -101,6 +101,10 @@
 // Audio buffer sizes (PSRAM-backed)
 #define CONFIG_STT_RING_BUFFER_SIZE         (64 * 1024)     // 64KB for 2 seconds @ 16kHz
 #define CONFIG_TTS_BUFFER_SIZE              (512 * 1024)    // 512KB for TTS WAV data
+
+#if CONFIG_I2S_DMA_BUF_LEN > 1023
+#error "CONFIG_I2S_DMA_BUF_LEN exceeds ESP32 I2S HW limit (1023 samples per DMA frame)"
+#endif
 
 /*******************************************************************************
  * CAMERA CONFIGURATION
@@ -122,14 +126,18 @@
 #define TASK_PRIORITY_STATE_MANAGER         10      // System orchestrator (Core 1)
 #define TASK_PRIORITY_I2S_AUDIO             9       // Real-time audio I/O (Core 0)
 #define TASK_PRIORITY_WEBSOCKET             8       // Network I/O (Core 0)
-#define TASK_PRIORITY_STT_PROCESSING        7       // Audio preprocessing (Core 1)
+#define TASK_PRIORITY_STT_PROCESSING        7       // Audio preprocessing (Core 0)
 #define TASK_PRIORITY_CAMERA_CAPTURE        6       // Frame acquisition (Core 1)
 #define TASK_PRIORITY_BUTTON_FSM            5       // Button handling (Core 0)
-#define TASK_PRIORITY_TTS_DECODER           5       // TTS WAV parsing (Core 1)
+#define TASK_PRIORITY_TTS_DECODER           5       // TTS WAV parsing (Core 0)
 
 // Core affinity
 #define TASK_CORE_PRO                       0       // Core 0 - I/O operations
 #define TASK_CORE_APP                       1       // Core 1 - Processing
+
+#define TASK_CORE_AUDIO_IO                  TASK_CORE_PRO
+#define TASK_CORE_NETWORK_IO                TASK_CORE_PRO
+#define TASK_CORE_CONTROL                   TASK_CORE_APP
 
 /*******************************************************************************
  * BUTTON FSM CONFIGURATION

@@ -6,17 +6,19 @@
 #include "audio_feedback.h"
 #include "audio_driver.h"
 #include "config.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <math.h>
 #include <string.h>
 
-#define FEEDBACK_SAMPLE_RATE     CONFIG_AUDIO_SAMPLE_RATE
-#define FEEDBACK_TONE_FREQUENCY  1400.0f   // Hz
-#define FEEDBACK_TONE_DURATION_MS 120      // milliseconds per beep
-#define FEEDBACK_SILENCE_MS       90       // gap between beeps
-#define FEEDBACK_VOLUME           0.35f    // scaled [-1.0,1.0]
+#define FEEDBACK_SAMPLE_RATE       CONFIG_AUDIO_SAMPLE_RATE
+#define FEEDBACK_TONE_FREQUENCY    1400.0f   // Hz
+#define FEEDBACK_TONE_DURATION_MS  120       // milliseconds per beep
+#define FEEDBACK_SILENCE_MS        90        // gap between beeps
+#define FEEDBACK_VOLUME            0.45f     // scaled [-1.0,1.0]
+#define FEEDBACK_CHANNELS          2U
 
 static const char *TAG = "AUDIO_FEEDBACK";
 
@@ -25,17 +27,19 @@ static const char *TAG = "AUDIO_FEEDBACK";
 #endif
 
 static bool s_waveform_ready = false;
-static int16_t s_beep_waveform[(FEEDBACK_SAMPLE_RATE * FEEDBACK_TONE_DURATION_MS) / 1000] __attribute__((aligned(4)));
+static int16_t s_beep_waveform[((FEEDBACK_SAMPLE_RATE * FEEDBACK_TONE_DURATION_MS) / 1000) * FEEDBACK_CHANNELS] DRAM_ATTR __attribute__((aligned(16)));
+static uint32_t s_beep_debug_logs = 0;
 
 static void audio_feedback_prepare_waveform(void) {
     if (s_waveform_ready) {
         return;
     }
 
-    const size_t sample_count = sizeof(s_beep_waveform) / sizeof(s_beep_waveform[0]);
+    const size_t frame_count = (sizeof(s_beep_waveform) / sizeof(int16_t)) / FEEDBACK_CHANNELS;
     const float angular_step = (2.0f * (float)M_PI * FEEDBACK_TONE_FREQUENCY) / (float)FEEDBACK_SAMPLE_RATE;
 
-    for (size_t i = 0; i < sample_count; ++i) {
+    size_t idx = 0;
+    for (size_t i = 0; i < frame_count; ++i) {
         float value = sinf(angular_step * (float)i);
         int32_t sample = (int32_t)(value * FEEDBACK_VOLUME * 32767.0f);
         if (sample > 32767) {
@@ -43,7 +47,9 @@ static void audio_feedback_prepare_waveform(void) {
         } else if (sample < -32768) {
             sample = -32768;
         }
-        s_beep_waveform[i] = (int16_t)sample;
+        int16_t rendered = (int16_t)sample;
+        s_beep_waveform[idx++] = rendered;
+        s_beep_waveform[idx++] = rendered;
     }
 
     s_waveform_ready = true;
@@ -53,6 +59,8 @@ static esp_err_t audio_feedback_emit_beep(bool allow_temp_driver) {
     esp_err_t ret;
     bool driver_was_initialized = audio_driver_is_initialized();
     bool driver_initialized_here = false;
+    const size_t payload_bytes = sizeof(s_beep_waveform);
+    const bool should_log_debug = (s_beep_debug_logs < 6);
 
     if (!driver_was_initialized) {
         if (!allow_temp_driver) {
@@ -72,17 +80,29 @@ static esp_err_t audio_feedback_emit_beep(bool allow_temp_driver) {
     audio_feedback_prepare_waveform();
 
     size_t bytes_written = 0;
+    if (should_log_debug) {
+        ESP_LOGD(TAG, "[BEEP] start allow_temp=%d driver_pre_init=%d bytes=%zu",
+                 allow_temp_driver, driver_was_initialized, payload_bytes);
+    }
+
     ret = audio_driver_write((const uint8_t *)s_beep_waveform,
-                             sizeof(s_beep_waveform),
+                             payload_bytes,
                              &bytes_written,
                              200);
 
-    if (ret != ESP_OK || bytes_written != sizeof(s_beep_waveform)) {
+    if (ret != ESP_OK || bytes_written != payload_bytes) {
         ESP_LOGE(TAG, "Beep write failed (%s), wrote %zu/%zu bytes",
-                 esp_err_to_name(ret), bytes_written, sizeof(s_beep_waveform));
-        if (ret == ESP_OK && bytes_written != sizeof(s_beep_waveform)) {
+                 esp_err_to_name(ret), bytes_written, payload_bytes);
+        if (ret == ESP_OK && bytes_written != payload_bytes) {
             ret = ESP_FAIL;
         }
+    } else if (should_log_debug) {
+        ESP_LOGD(TAG, "[BEEP] complete wrote=%zu bytes temp_driver=%d",
+                 bytes_written, driver_initialized_here);
+    }
+
+    if (should_log_debug) {
+        s_beep_debug_logs++;
     }
 
     if (driver_initialized_here) {

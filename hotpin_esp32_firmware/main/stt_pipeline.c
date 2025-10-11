@@ -13,6 +13,8 @@
 #include "config.h"
 #include "audio_driver.h"
 #include "websocket_client.h"
+#include "event_dispatcher.h"
+#include "system_events.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -190,7 +192,7 @@ esp_err_t stt_pipeline_start(void) {
         NULL,
         TASK_PRIORITY_STT_PROCESSING,
         &g_audio_capture_task_handle,
-        0  // Core 0 - CRITICAL: Must match Wi-Fi core to prevent DMA corruption
+    TASK_CORE_AUDIO_IO  // Core 0 - CRITICAL: Must match Wi-Fi core to prevent DMA corruption
     );
     
     if (ret != pdPASS) {
@@ -206,7 +208,7 @@ esp_err_t stt_pipeline_start(void) {
         NULL,
         TASK_PRIORITY_STT_PROCESSING,
         &g_audio_streaming_task_handle,
-        0  // Core 0 - Keep both STT tasks on same core
+    TASK_CORE_AUDIO_IO  // Core 0 - Keep both STT tasks on same core
     );
     
     if (ret != pdPASS) {
@@ -218,6 +220,14 @@ esp_err_t stt_pipeline_start(void) {
     
     is_running = true;
     is_recording = true;
+
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_STT_STARTED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+    };
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue STT start event");
+    }
     
     ESP_LOGI(TAG, "✅ STT pipeline started");
     return ESP_OK;
@@ -254,6 +264,14 @@ esp_err_t stt_pipeline_stop(void) {
         g_audio_streaming_task_handle = NULL;
     }
     
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_STT_STOPPED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+    };
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue STT stop event");
+    }
+
     ESP_LOGI(TAG, "STT pipeline stopped");
     return ESP_OK;
 }

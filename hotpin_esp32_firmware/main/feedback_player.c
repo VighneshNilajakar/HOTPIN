@@ -6,6 +6,7 @@
 #include "feedback_player.h"
 #include "audio_driver.h"
 #include "config.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
@@ -20,10 +21,12 @@
 #endif
 
 #define FEEDBACK_SAMPLE_RATE          CONFIG_AUDIO_SAMPLE_RATE
-#define FEEDBACK_MAX_SEGMENT_MS       600U
-#define FEEDBACK_MAX_SEGMENT_SAMPLES  ((FEEDBACK_SAMPLE_RATE * FEEDBACK_MAX_SEGMENT_MS) / 1000U)
-#define FEEDBACK_DEFAULT_VOLUME       0.45f
-#define FEEDBACK_LOW_VOLUME           0.35f
+#define FEEDBACK_MAX_SEGMENT_MS        600U
+#define FEEDBACK_CHANNELS              2U
+#define FEEDBACK_MAX_SEGMENT_FRAMES   ((FEEDBACK_SAMPLE_RATE * FEEDBACK_MAX_SEGMENT_MS) / 1000U)
+#define FEEDBACK_MAX_SEGMENT_SAMPLES  (FEEDBACK_MAX_SEGMENT_FRAMES * FEEDBACK_CHANNELS)
+#define FEEDBACK_DEFAULT_VOLUME        0.60f
+#define FEEDBACK_LOW_VOLUME            0.45f
 
 #define NOTE_C4   261.63f
 #define NOTE_E4   329.63f
@@ -44,7 +47,7 @@ typedef struct {
 static const char *TAG = "FEEDBACK_PLAYER";
 static SemaphoreHandle_t s_play_mutex = NULL;
 static bool s_initialized = false;
-static int16_t s_work_buffer[FEEDBACK_MAX_SEGMENT_SAMPLES];
+static int16_t s_work_buffer[FEEDBACK_MAX_SEGMENT_SAMPLES] DRAM_ATTR __attribute__((aligned(16)));
 
 static esp_err_t ensure_initialized(void);
 static esp_err_t play_segments(const tone_segment_t *segments, size_t count);
@@ -208,22 +211,26 @@ static inline int16_t float_to_sample(float value) {
     return (int16_t)(value * 32767.0f);
 }
 
-static void generate_noise_samples(size_t sample_count, float amplitude) {
+static void generate_noise_samples(size_t frame_count, float amplitude) {
     const float scale = amplitude;
-    for (size_t i = 0; i < sample_count; ++i) {
+    size_t idx = 0;
+    for (size_t i = 0; i < frame_count; ++i) {
         int32_t random_value = (int32_t)(esp_random() & 0xFFFF);
         float normalized = ((float)random_value / 32768.0f) - 1.0f;
-        s_work_buffer[i] = float_to_sample(normalized * scale);
+        int16_t sample = float_to_sample(normalized * scale);
+        s_work_buffer[idx++] = sample;
+        s_work_buffer[idx++] = sample;
     }
 }
 
-static void generate_tone_samples(size_t sample_count, float freq_a, float freq_b, float amplitude) {
+static void generate_tone_samples(size_t frame_count, float freq_a, float freq_b, float amplitude) {
     float phase_a = 0.0f;
     float phase_b = 0.0f;
     const float omega_a = (freq_a > 0.0f) ? (2.0f * (float)M_PI * freq_a / (float)FEEDBACK_SAMPLE_RATE) : 0.0f;
     const float omega_b = (freq_b > 0.0f) ? (2.0f * (float)M_PI * freq_b / (float)FEEDBACK_SAMPLE_RATE) : 0.0f;
+    size_t idx = 0;
 
-    for (size_t i = 0; i < sample_count; ++i) {
+    for (size_t i = 0; i < frame_count; ++i) {
         float sample = 0.0f;
         if (omega_a > 0.0f) {
             sample += sinf(phase_a);
@@ -233,7 +240,9 @@ static void generate_tone_samples(size_t sample_count, float freq_a, float freq_
             sample += 0.6f * sinf(phase_b);
             phase_b += omega_b;
         }
-        s_work_buffer[i] = float_to_sample(sample * amplitude);
+        int16_t rendered = float_to_sample(sample * amplitude);
+        s_work_buffer[idx++] = rendered;
+        s_work_buffer[idx++] = rendered;
     }
 }
 
@@ -244,24 +253,24 @@ static esp_err_t play_segments(const tone_segment_t *segments, size_t count) {
             continue;
         }
 
-        size_t sample_count = (FEEDBACK_SAMPLE_RATE * segment->duration_ms) / 1000U;
-        if (sample_count == 0U) {
+        size_t frame_count = (FEEDBACK_SAMPLE_RATE * segment->duration_ms) / 1000U;
+        if (frame_count == 0U) {
             continue;
         }
-        if (sample_count > FEEDBACK_MAX_SEGMENT_SAMPLES) {
+        if (frame_count > FEEDBACK_MAX_SEGMENT_FRAMES) {
             ESP_LOGW(TAG, "Segment duration too long (%u ms) - truncating", (unsigned int)segment->duration_ms);
-            sample_count = FEEDBACK_MAX_SEGMENT_SAMPLES;
+            frame_count = FEEDBACK_MAX_SEGMENT_FRAMES;
         }
 
         if (segment->is_noise) {
-            generate_noise_samples(sample_count, segment->amplitude);
+            generate_noise_samples(frame_count, segment->amplitude);
         } else if (segment->primary_freq_hz <= 0.0f && segment->secondary_freq_hz <= 0.0f) {
-            memset(s_work_buffer, 0, sample_count * sizeof(int16_t));
+            memset(s_work_buffer, 0, frame_count * FEEDBACK_CHANNELS * sizeof(int16_t));
         } else {
-            generate_tone_samples(sample_count, segment->primary_freq_hz, segment->secondary_freq_hz, segment->amplitude);
+            generate_tone_samples(frame_count, segment->primary_freq_hz, segment->secondary_freq_hz, segment->amplitude);
         }
 
-        const size_t byte_count = sample_count * sizeof(int16_t);
+        const size_t byte_count = frame_count * FEEDBACK_CHANNELS * sizeof(int16_t);
         size_t total_written = 0U;
 
         while (total_written < byte_count) {
