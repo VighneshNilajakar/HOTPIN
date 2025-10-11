@@ -37,6 +37,7 @@ static system_state_t previous_state = SYSTEM_STATE_INIT;
 extern QueueHandle_t g_button_event_queue;
 extern QueueHandle_t g_state_event_queue;
 extern SemaphoreHandle_t g_i2s_config_mutex;
+extern void websocket_connection_request_shutdown(void);
 
 // Task handles for coordination
 static TaskHandle_t camera_task_handle = NULL;
@@ -59,6 +60,7 @@ static esp_err_t handle_shutdown(void);
 static void handle_error_state(void);
 static const char* state_to_string(system_state_t state);
 static void wait_for_voice_pipeline_shutdown(void);
+static esp_err_t capture_and_upload_image(void);
 
 // ===========================
 // Public Functions
@@ -358,190 +360,150 @@ static esp_err_t transition_to_camera_mode(void) {
     return ESP_OK;
 }
 
-static esp_err_t handle_camera_capture(void) {
-    ESP_LOGI(TAG, "Starting camera capture sequence");
-    esp_err_t ret;
-    
-    // Step 1: Stop audio tasks if in voice mode
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-        ESP_LOGI(TAG, "Stopping STT/TTS tasks...");
-        stt_pipeline_stop();
-        wait_for_voice_pipeline_shutdown();
-        tts_decoder_stop();
-        vTaskDelay(pdMS_TO_TICKS(100));  // Allow tasks to clean up
-    }
-    
-    // Step 2: Acquire I2S mutex
-    ESP_LOGI(TAG, "Acquiring I2S mutex for camera capture...");
-    if (xSemaphoreTake(g_i2s_config_mutex, pdMS_TO_TICKS(STATE_TRANSITION_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to acquire I2S mutex - timeout");
-        return ESP_ERR_TIMEOUT;
-    }
-    
-    // Step 3: Stop and deinit I2S drivers if voice mode is active
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-        ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════");
-        ESP_LOGI(TAG, "║ CAMERA CAPTURE: I2S Driver Shutdown Sequence");
-        ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════");
-        
-        // Pre-shutdown diagnostics
-        ESP_LOGI(TAG, "[DIAG] Pre-shutdown state:");
-        ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
-        ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-        
-        // Allow audio tasks to complete current operations
-        ESP_LOGI(TAG, "[STEP 1/4] Settling delay (50ms)...");
-        vTaskDelay(pdMS_TO_TICKS(50));
-        
-        // Deinitialize I2S driver (stops I2S, uninstalls driver, frees interrupts)
-        ESP_LOGI(TAG, "[STEP 2/4] Deinitializing I2S driver...");
-        int64_t start_time = esp_timer_get_time();
-        ret = audio_driver_deinit();
-        int64_t deinit_time = (esp_timer_get_time() - start_time) / 1000;
-        
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "❌ Failed to deinit audio driver: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)deinit_time);
-            xSemaphoreGive(g_i2s_config_mutex);
-            return ret;
-        }
-        ESP_LOGI(TAG, "✅ I2S driver deinitialized (took %lld ms)", (long long)deinit_time);
-        
-        // Critical: Extended settling time for interrupt/pin matrix to stabilize
-        ESP_LOGI(TAG, "[STEP 3/4] Hardware stabilization delay (100ms)...");
-        ESP_LOGI(TAG, "  Purpose: Free I2S interrupts and GPIO matrix");
-        vTaskDelay(pdMS_TO_TICKS(100));
-        
-        // Post-shutdown diagnostics
-        ESP_LOGI(TAG, "[STEP 4/4] Post-shutdown state:");
-        ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
-        ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-        ESP_LOGI(TAG, "✅ I2S shutdown sequence complete");
-    }
-    
-    // Step 4: Initialize camera (if not already initialized)
-    if (current_state != SYSTEM_STATE_CAMERA_STANDBY) {
-        ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════");
-        ESP_LOGI(TAG, "║ CAMERA CAPTURE: Camera Initialization");
-        ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════");
-        
-        ESP_LOGI(TAG, "[DIAG] Pre-init state:");
-        ESP_LOGI(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
-        ESP_LOGI(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-        
-        ESP_LOGI(TAG, "Initializing camera...");
-        int64_t start_time = esp_timer_get_time();
-        ret = camera_controller_init();
-        int64_t init_time = (esp_timer_get_time() - start_time) / 1000;
-        
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "❌ Camera init failed: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)init_time);
-            ESP_LOGE(TAG, "  This may indicate interrupt allocation failure");
-            ESP_LOGE(TAG, "  Attempting to recover by restoring audio...");
-            goto restore_audio;
-        }
-        ESP_LOGI(TAG, "✅ Camera initialized successfully (took %lld ms)", (long long)init_time);
-    }
-    
-    // Step 5: Capture frame
-    ESP_LOGI(TAG, "Capturing frame...");
+static esp_err_t capture_and_upload_image(void) {
+    ESP_LOGI(TAG, "Capturing frame from camera");
+
     camera_fb_t *fb = camera_controller_capture_frame();
     if (fb == NULL) {
         ESP_LOGE(TAG, "Frame capture failed");
-        if (current_state != SYSTEM_STATE_CAMERA_STANDBY) {
-            camera_controller_deinit();
-        }
-        goto restore_audio;
+        return ESP_FAIL;
     }
-    
+
     ESP_LOGI(TAG, "Frame captured: %zu bytes", fb->len);
 
     esp_err_t capture_feedback = audio_feedback_beep_single(true);
     if (capture_feedback != ESP_OK) {
         ESP_LOGW(TAG, "Capture feedback failed: %s", esp_err_to_name(capture_feedback));
-    } else {
-        ESP_LOGI(TAG, "🔔 Capture feedback dispatched");
     }
-    
-    // Step 6: Generate session ID and upload
+
     char session_id[64];
     json_protocol_generate_session_id(session_id, sizeof(session_id));
-    
-    ESP_LOGI(TAG, "Uploading image to server...");
+
+    ESP_LOGI(TAG, "Uploading image using session %s", session_id);
     char response[512];
-    ret = http_client_upload_image(session_id, fb->buf, fb->len, 
-                                    response, sizeof(response));
-    
-    // Release frame buffer
+    esp_err_t ret = http_client_upload_image(session_id, fb->buf, fb->len,
+                                             response, sizeof(response));
+
     esp_camera_fb_return(fb);
-    
+
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Image uploaded successfully");
-        // TODO: Parse response for beep trigger if server sends one
         esp_err_t upload_feedback = audio_feedback_beep_double(true);
         if (upload_feedback != ESP_OK) {
             ESP_LOGW(TAG, "Upload feedback failed: %s", esp_err_to_name(upload_feedback));
-        } else {
-            ESP_LOGI(TAG, "🔔 Upload feedback dispatched");
         }
     } else {
         ESP_LOGE(TAG, "Image upload failed: %s", esp_err_to_name(ret));
     }
-    
-    // Step 7: Deinitialize camera if we were in voice mode
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+
+    return ret;
+}
+
+static esp_err_t handle_camera_capture(void) {
+    ESP_LOGI(TAG, "Starting camera capture sequence");
+
+    // Fast path when camera is already armed
+    if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
+        if (!camera_controller_is_initialized()) {
+            ESP_LOGW(TAG, "Camera not initialized in standby; attempting init");
+            esp_err_t init_ret = camera_controller_init();
+            if (init_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(init_ret));
+                return init_ret;
+            }
+        }
+        return capture_and_upload_image();
+    }
+
+    // If another state requested capture, try without touching audio path
+    if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
+        ESP_LOGW(TAG, "Camera capture requested during %s", state_to_string(current_state));
+        return capture_and_upload_image();
+    }
+
+    bool voice_pipeline_paused = false;
+    esp_err_t ret = ESP_OK;
+
+    ESP_LOGI(TAG, "Pausing voice pipelines prior to capture");
+    stt_pipeline_stop();
+    wait_for_voice_pipeline_shutdown();
+    tts_decoder_stop();
+    voice_pipeline_paused = true;
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_LOGI(TAG, "Acquiring I2S mutex for capture");
+    if (xSemaphoreTake(g_i2s_config_mutex, pdMS_TO_TICKS(STATE_TRANSITION_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire I2S mutex for capture");
+        if (voice_pipeline_paused) {
+            stt_pipeline_start();
+            tts_decoder_start();
+        }
+        return ESP_ERR_TIMEOUT;
+    }
+
+    bool audio_was_initialized = audio_driver_is_initialized();
+    bool camera_initialized_here = false;
+
+    if (audio_was_initialized) {
+        ESP_LOGI(TAG, "Stopping audio driver before camera activation");
+        ret = audio_driver_deinit();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Audio driver deinit failed: %s", esp_err_to_name(ret));
+            goto restore_voice_path;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    if (!camera_controller_is_initialized()) {
+        ESP_LOGI(TAG, "Initializing camera for capture");
+        ret = camera_controller_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(ret));
+            goto restore_voice_path;
+        }
+        camera_initialized_here = true;
+    }
+
+    ret = capture_and_upload_image();
+
+restore_voice_path:
+    if (camera_initialized_here) {
         camera_controller_deinit();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    
-restore_audio:
-    // Step 8: Reinitialize I2S drivers if we were in voice mode
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-        ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════");
-        ESP_LOGI(TAG, "║ CAMERA CAPTURE: Audio Driver Restoration");
-        ESP_LOGI(TAG, "╚════════════════════════════════════════════════════════");
-        
-        // Small delay before reinitializing
-        ESP_LOGI(TAG, "[STEP 1/3] Pre-init settling (50ms)...");
-        vTaskDelay(pdMS_TO_TICKS(50));
-        
-        ESP_LOGI(TAG, "[STEP 2/3] Reinitializing I2S audio driver...");
-        int64_t start_time = esp_timer_get_time();
-        ret = audio_driver_init();
-        int64_t init_time = (esp_timer_get_time() - start_time) / 1000;
-        
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "❌ CRITICAL: Failed to reinit audio: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)init_time);
-            ESP_LOGE(TAG, "  System may be in unstable state");
-            ESP_LOGE(TAG, "  Consider device restart if this persists");
-            xSemaphoreGive(g_i2s_config_mutex);
-            return ESP_FAIL;
-        }
-        ESP_LOGI(TAG, "✅ Audio driver reinitialized (took %lld ms)", (long long)init_time);
-        
-        // audio_driver_init() already starts the driver
-        
-        // Restart STT and TTS pipelines
-        ESP_LOGI(TAG, "[STEP 3/3] Restarting STT and TTS pipelines...");
-        stt_pipeline_start();
-        tts_decoder_start();
-        ESP_LOGI(TAG, "✅ Audio pipelines restarted");
 
-        esp_err_t resume_feedback = audio_feedback_beep_single(false);
-        if (resume_feedback != ESP_OK) {
-            ESP_LOGW(TAG, "Resume feedback failed: %s", esp_err_to_name(resume_feedback));
+    if (voice_pipeline_paused) {
+        if (audio_was_initialized) {
+            ESP_LOGI(TAG, "Restoring audio driver after capture");
+            esp_err_t audio_ret = audio_driver_init();
+            if (audio_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to reinitialize audio driver: %s", esp_err_to_name(audio_ret));
+                if (ret == ESP_OK) {
+                    ret = audio_ret;
+                }
+            } else {
+                stt_pipeline_start();
+                tts_decoder_start();
+
+                esp_err_t resume_feedback = audio_feedback_beep_single(false);
+                if (resume_feedback != ESP_OK) {
+                    ESP_LOGW(TAG, "Resume feedback failed: %s", esp_err_to_name(resume_feedback));
+                }
+            }
         } else {
-            ESP_LOGI(TAG, "🔔 Recording resume feedback dispatched");
+            // Audio driver was already offline; just restart pipelines
+            stt_pipeline_start();
+            tts_decoder_start();
         }
     }
-    
-    // Release mutex
+
     xSemaphoreGive(g_i2s_config_mutex);
-    
-    ESP_LOGI(TAG, "Camera capture sequence complete");
-    return ESP_OK;
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Camera capture sequence complete");
+    }
+
+    return ret;
 }
 
 static esp_err_t transition_to_voice_mode(void) {
@@ -693,10 +655,11 @@ static esp_err_t handle_shutdown(void) {
     stt_pipeline_stop();
     tts_decoder_stop();
     
-    // Disconnect WebSocket
-    if (websocket_client_is_connected()) {
-        ESP_LOGI(TAG, "Disconnecting WebSocket...");
-        websocket_client_disconnect();
+    ESP_LOGI(TAG, "Requesting WebSocket shutdown");
+    websocket_connection_request_shutdown();
+
+    for (int i = 0; i < 40 && websocket_client_is_connected(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
     
     ESP_LOGI(TAG, "✅ Shutdown complete");

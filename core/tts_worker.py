@@ -4,12 +4,68 @@ Handles blocking text-to-speech generation in thread pool isolation
 """
 
 import os
+import io
+import wave
 import tempfile
 import pyttsx3
 from typing import Optional
 
+try:
+    import audioop  # type: ignore[import]
+except ImportError as exc:
+    raise RuntimeError("Python standard library module 'audioop' is required for TTS resampling") from exc
+
 # TTS engine configuration
 DEFAULT_RATE = 175  # Words per minute (moderate speed for clarity)
+
+TARGET_SAMPLE_RATE = 16000  # Match ESP32 microphone pipeline
+TARGET_SAMPLE_WIDTH = 2     # 16-bit PCM
+TARGET_CHANNELS = 1         # Mono playback
+
+
+def _ensure_pcm_format(wav_bytes: bytes) -> bytes:
+    """Normalize synthesized audio to 16 kHz, mono, 16-bit PCM."""
+
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav_in:
+            params = wav_in.getparams()
+            frames = wav_in.readframes(params.nframes)
+    except wave.Error as exc:
+        raise ValueError(f"Invalid WAV produced by TTS engine: {exc}") from exc
+
+    sample_width = params.sampwidth
+    channels = params.nchannels
+    sample_rate = params.framerate
+
+    # Convert channels to mono if needed
+    if channels > TARGET_CHANNELS:
+        if channels != 2:
+            raise ValueError(f"Unsupported channel count: {channels}")
+        frames = audioop.tomono(frames, sample_width, 0.5, 0.5)
+        channels = 1
+
+    # Ensure 16-bit samples
+    if sample_width != TARGET_SAMPLE_WIDTH:
+        frames = audioop.lin2lin(frames, sample_width, TARGET_SAMPLE_WIDTH)
+        sample_width = TARGET_SAMPLE_WIDTH
+
+    # Resample to target rate if needed
+    if sample_rate != TARGET_SAMPLE_RATE:
+        frames, _ = audioop.ratecv(frames, sample_width, channels,
+                                   sample_rate, TARGET_SAMPLE_RATE, None)
+        sample_rate = TARGET_SAMPLE_RATE
+
+    if channels != TARGET_CHANNELS or sample_width != TARGET_SAMPLE_WIDTH or sample_rate != TARGET_SAMPLE_RATE:
+        raise ValueError("Failed to normalize WAV format")
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_out:
+        wav_out.setnchannels(TARGET_CHANNELS)
+        wav_out.setsampwidth(TARGET_SAMPLE_WIDTH)
+        wav_out.setframerate(TARGET_SAMPLE_RATE)
+        wav_out.writeframes(frames)
+
+    return buffer.getvalue()
 
 
 def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
@@ -82,6 +138,9 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
         # Verify we got valid audio data
         if len(wav_bytes) == 0:
             raise ValueError("TTS synthesis produced empty audio file")
+
+        # Normalize to device-friendly PCM format
+        wav_bytes = _ensure_pcm_format(wav_bytes)
         
         print(f"✓ TTS synthesis completed: {len(wav_bytes)} bytes generated")
         

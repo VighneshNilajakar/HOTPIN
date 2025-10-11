@@ -1,5 +1,5 @@
-PS F:\Documents\College\6th Semester\Project\ESP_Warp> python main.py
-INFO:     Started server process [13216]
+PS F:\Documents\College\6th Semester\Project\ESP_Warp> python main.py         
+INFO:     Started server process [12272]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -8,10 +8,10 @@ INFO:     Waiting for application startup.
 
 📡 Network Information:
    WiFi Network: wifi
-   IP Address: 10.87.102.58
+   IP Address: 10.140.180.58
    Interface: WiFi
-   Server URL: http://10.87.102.58:8000
-   WebSocket URL: ws://10.87.102.58:8000/ws
+   Server URL: http://10.140.180.58:8000
+   WebSocket URL: ws://10.140.180.58:8000/ws
 
 ✓ Groq AsyncClient initialized with model: openai/gpt-oss-20b
 Loading Vosk model from: ./model
@@ -35,28 +35,18 @@ LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo ./model/graph/phones/wo
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)        
-INFO:     10.87.102.214:53114 - "WebSocket /ws" [accepted]
-🔌 New WebSocket connection established
-INFO:     connection open
-✓ Session initialized: esp32-cam-hotpin
-📷 [hotpin-998C64-33] Image received: image.jpg, 29630 bytes (28.94 KB)
-💾 [hotpin-998C64-33] Image saved: captured_images/hotpin-998C64-33_20251011_223933.jpg
-INFO:     10.87.102.214:53115 - "POST /image HTTP/1.1" 200 OK
-✗ WebSocket error [esp32-cam-hotpin]: Cannot call "receive" once a disconnect message has been received.
-🧹 [esp32-cam-hotpin] Session cleaned up
-INFO:     connection closed
-INFO:     10.87.102.214:58824 - "WebSocket /ws" [accepted]
+INFO:     10.140.180.214:49231 - "WebSocket /ws" [accepted]
 🔌 New WebSocket connection established
 INFO:     connection open
 ✓ Session initialized: esp32-cam-hotpin
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 73728 bytes of audio...
-✓ Transcription [esp32-cam-hotpin]: "hello hello"
-📝 [esp32-cam-hotpin] Transcript: "hello hello"
+🔄 [esp32-cam-hotpin] Processing 90112 bytes of audio...
+✓ Transcription [esp32-cam-hotpin]: "hello"
+📝 [esp32-cam-hotpin] Transcript: "hello"
 🤖 [esp32-cam-hotpin] LLM response: "Hello! How can I help you today?"
-✓ TTS synthesis completed: 153740 bytes generated
-✓ Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_sn3xb_e_.wav
-🔊 [esp32-cam-hotpin] Streaming 153740 bytes of audio response...
+✓ TTS synthesis completed: 111568 bytes generated
+✓ Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_k860osv7.wav
+🔊 [esp32-cam-hotpin] Streaming 111568 bytes of audio response...
 ✓ [esp32-cam-hotpin] Response streaming complete
 🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
 ✗ WebSocket error [esp32-cam-hotpin]: Cannot call "receive" once a disconnect message has been received.

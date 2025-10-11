@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -69,6 +70,12 @@ TaskHandle_t g_websocket_task_handle = NULL;
 // Connection status flags
 static volatile bool g_wifi_connected = false;
 static volatile bool g_websocket_connected = false;
+
+// WebSocket coordination
+static EventGroupHandle_t g_websocket_event_group = NULL;
+
+#define WS_EVENT_WIFI_READY    BIT0
+#define WS_EVENT_SHUTDOWN      BIT1
 
 // WiFi credentials from Kconfig (configured via .env file)
 #define WIFI_SSID      CONFIG_HOTPIN_WIFI_SSID
@@ -127,8 +134,10 @@ void app_main(void) {
     g_i2s_config_mutex = xSemaphoreCreateMutex();
     g_button_event_queue = xQueueCreate(10, sizeof(button_event_t));
     g_state_event_queue = xQueueCreate(20, sizeof(state_event_t));
+    g_websocket_event_group = xEventGroupCreate();
     
-    if (!g_i2s_config_mutex || !g_button_event_queue || !g_state_event_queue) {
+    if (!g_i2s_config_mutex || !g_button_event_queue || !g_state_event_queue ||
+        !g_websocket_event_group) {
         ESP_LOGE(TAG, "Failed to create synchronization primitives");
         esp_restart();
     }
@@ -379,83 +388,134 @@ static void websocket_status_callback(websocket_status_t status, void *arg) {
  * with automatic retry on failure.
  */
 static void websocket_connection_task(void *pvParameters) {
-    const int MAX_RETRY_DELAY_MS = 30000;  // Max 30 seconds between retries
-    int retry_delay_ms = 5000;              // Start with 5 seconds
-    int retry_count = 0;
-    
+    const int MAX_RETRY_DELAY_MS = 30000;
+    int retry_delay_ms = 5000;
+    int attempt = 0;
+
     ESP_LOGI(TAG, "WebSocket connection task started on Core %d", xPortGetCoreID());
-    
-    // Wait for WiFi to be connected
-    ESP_LOGI(TAG, "Waiting for WiFi connection...");
-    while (!g_wifi_connected) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    
-    ESP_LOGI(TAG, "WiFi connected! Starting WebSocket connection...");
-    
-    // Keep trying to connect to WebSocket until successful
-    while (!g_websocket_connected) {
-        retry_count++;
-        
-        ESP_LOGI(TAG, "🔌 Attempting WebSocket connection (attempt %d)...", retry_count);
-        
-        esp_err_t ret = websocket_client_connect();
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "✅ WebSocket connection initiated successfully");
-            
-            // Wait a bit for the connection to be established
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            
-            // Check if actually connected (status is set by websocket event handler)
+
+    while (true) {
+        EventBits_t wait_bits = xEventGroupWaitBits(
+            g_websocket_event_group,
+            WS_EVENT_WIFI_READY | WS_EVENT_SHUTDOWN,
+            pdFALSE,
+            pdFALSE,
+            portMAX_DELAY);
+
+        if (wait_bits & WS_EVENT_SHUTDOWN) {
+            break;
+        }
+
+        if (!(wait_bits & WS_EVENT_WIFI_READY)) {
+            continue;
+        }
+
+        retry_delay_ms = 5000;
+        attempt = 0;
+
+        while (!g_websocket_connected) {
+            EventBits_t bits_snapshot = xEventGroupGetBits(g_websocket_event_group);
+            if (bits_snapshot & WS_EVENT_SHUTDOWN) {
+                goto task_shutdown;
+            }
+            if (!(bits_snapshot & WS_EVENT_WIFI_READY)) {
+                ESP_LOGW(TAG, "WiFi not ready, pausing WebSocket connection attempts");
+                break;
+            }
+
+            attempt++;
+            ESP_LOGI(TAG, "🔌 Attempting WebSocket connection (attempt %d)...", attempt);
+
+            esp_err_t ret = websocket_client_connect();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "❌ WebSocket connection failed: %s", esp_err_to_name(ret));
+            }
+
+            TickType_t start = xTaskGetTickCount();
+            TickType_t poll_delay = pdMS_TO_TICKS(200);
+            TickType_t max_wait = pdMS_TO_TICKS(retry_delay_ms);
+
+            while (!g_websocket_connected) {
+                if (xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_SHUTDOWN) {
+                    goto task_shutdown;
+                }
+
+                if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
+                    ESP_LOGW(TAG, "WiFi lost during WebSocket connection attempt");
+                    break;
+                }
+
+                if ((xTaskGetTickCount() - start) >= max_wait) {
+                    break;
+                }
+
+                vTaskDelay(poll_delay);
+            }
+
             if (g_websocket_connected) {
                 ESP_LOGI(TAG, "🎉 WebSocket connected and verified!");
                 break;
-            } else {
-                ESP_LOGW(TAG, "⚠️ WebSocket client started but not yet connected");
             }
-        } else {
-            ESP_LOGE(TAG, "❌ WebSocket connection failed: %s", esp_err_to_name(ret));
+
+            if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
+                ESP_LOGW(TAG, "WiFi offline, will wait for reconnection");
+                break;
+            }
+
+            retry_delay_ms = retry_delay_ms + (retry_delay_ms / 2);
+            if (retry_delay_ms > MAX_RETRY_DELAY_MS) {
+                retry_delay_ms = MAX_RETRY_DELAY_MS;
+            }
         }
-        
-        // Exponential backoff with cap
-        ESP_LOGW(TAG, "⏳ Retrying WebSocket connection in %d ms...", retry_delay_ms);
-        vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
-        
-        // Increase delay for next retry (exponential backoff)
-        retry_delay_ms = (retry_delay_ms * 3) / 2;  // 1.5x multiplier
-        if (retry_delay_ms > MAX_RETRY_DELAY_MS) {
-            retry_delay_ms = MAX_RETRY_DELAY_MS;
-        }
-    }
-    
-    ESP_LOGI(TAG, "✅ WebSocket connection established!");
-    
-    // FIX: Keep task alive to maintain WebSocket connection
-    // Monitor connection status and handle reconnection if needed
-    ESP_LOGI(TAG, "📡 WebSocket monitoring task running...");
-    
-    while (1) {
-        // Check connection status periodically
+
         if (!g_websocket_connected) {
-            ESP_LOGW(TAG, "⚠️ WebSocket disconnected, attempting reconnection...");
-            
-            // Try to reconnect
-            esp_err_t ret = websocket_client_connect();
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "✅ WebSocket reconnection initiated");
-                vTaskDelay(pdMS_TO_TICKS(3000));  // Wait for connection to establish
-            } else {
-                ESP_LOGE(TAG, "❌ WebSocket reconnection failed: %s", esp_err_to_name(ret));
-                vTaskDelay(pdMS_TO_TICKS(5000));  // Wait before next retry
+            continue;
+        }
+
+        ESP_LOGI(TAG, "📡 WebSocket connection active - entering monitor loop");
+
+        while (g_websocket_connected) {
+            EventBits_t monitor_bits = xEventGroupWaitBits(
+                g_websocket_event_group,
+                WS_EVENT_SHUTDOWN,
+                pdFALSE,
+                pdFALSE,
+                pdMS_TO_TICKS(10000));
+
+            if (monitor_bits & WS_EVENT_SHUTDOWN) {
+                goto task_shutdown;
+            }
+
+            if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
+                ESP_LOGW(TAG, "WiFi connectivity lost - WebSocket will retry when back online");
+                break;
+            }
+
+            if (!g_websocket_connected) {
+                ESP_LOGW(TAG, "WebSocket disconnected - restarting connection sequence");
+                break;
             }
         }
-        
-        // Sleep for 10 seconds before next status check
-        vTaskDelay(pdMS_TO_TICKS(10000));
     }
-    
-    // Task should never reach here, but cleanup if it does
+
+task_shutdown:
+    ESP_LOGI(TAG, "WebSocket connection task shutting down");
+    if (g_websocket_event_group != NULL) {
+        xEventGroupClearBits(g_websocket_event_group, WS_EVENT_SHUTDOWN);
+    }
+    if (g_websocket_connected) {
+        websocket_client_disconnect();
+        g_websocket_connected = false;
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    g_websocket_task_handle = NULL;
     vTaskDelete(NULL);
+}
+
+void websocket_connection_request_shutdown(void) {
+    if (g_websocket_event_group != NULL) {
+        xEventGroupSetBits(g_websocket_event_group, WS_EVENT_SHUTDOWN);
+    }
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -464,6 +524,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         switch (event_id) {
             case WIFI_EVENT_STA_START:
                 ESP_LOGI(TAG, "WiFi station started, connecting...");
+                if (g_websocket_event_group != NULL) {
+                    xEventGroupClearBits(g_websocket_event_group,
+                                         WS_EVENT_WIFI_READY);
+                }
                 esp_wifi_connect();
                 break;
                 
@@ -471,6 +535,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 ESP_LOGW(TAG, "WiFi disconnected, retrying...");
                 g_wifi_connected = false;
                 g_websocket_connected = false;
+                if (g_websocket_event_group != NULL) {
+                    xEventGroupClearBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
+                }
                 esp_wifi_connect();
                 break;
                 
@@ -488,6 +555,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         // Set WiFi connected flag
         g_wifi_connected = true;
         led_controller_set_state(LED_STATE_WIFI_CONNECTED);
+        if (g_websocket_event_group != NULL) {
+            xEventGroupSetBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
+        }
         
         // WebSocket connection will be handled by websocket_connection_task
         ESP_LOGI(TAG, "WiFi ready - WebSocket connection task will handle server connection");
