@@ -89,4 +89,21 @@ bool audio_driver_is_initialized(void);
  */
 esp_err_t audio_driver_clear_buffers(void);
 
+/**
+ * @brief Update the I2S TX sample rate without rebuilding the driver
+ *
+ * Thread-safe helper that temporarily disables the TX channel, reconfigures
+ * the clock dividers, and re-enables playback. Used by the TTS decoder when
+ * streaming PCM at sample rates different from CONFIG_AUDIO_SAMPLE_RATE.
+ *
+ * @param sample_rate Desired sample rate in Hz (e.g., 16000, 22050)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t audio_driver_set_tx_sample_rate(uint32_t sample_rate);
+
+/**
+ * @brief Get the currently active I2S TX sample rate in Hz
+ */
+uint32_t audio_driver_get_tx_sample_rate(void);
+
 #endif // AUDIO_DRIVER_H

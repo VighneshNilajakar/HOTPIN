@@ -18,6 +18,7 @@ static const char *TAG = TAG_WEBSOCKET;
 static bool is_connected = false;
 static bool is_initialized = false;
 static char server_uri[128] = {0};
+static websocket_pipeline_stage_t g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 
 // Callback function pointers (stubs)
 static websocket_audio_callback_t g_audio_callback = NULL;
@@ -58,6 +59,7 @@ esp_err_t websocket_client_connect(void) {
         return ESP_ERR_INVALID_STATE;
     }
     is_connected = true;
+    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     
     // Simulate connected status callback
     if (g_status_callback) {
@@ -70,6 +72,7 @@ esp_err_t websocket_client_connect(void) {
 esp_err_t websocket_client_disconnect(void) {
     ESP_LOGW(TAG, "WebSocket client STUB disconnect");
     is_connected = false;
+    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     
     // Simulate disconnected status callback
     if (g_status_callback) {
@@ -127,4 +130,29 @@ void websocket_client_set_status_callback(websocket_status_callback_t callback, 
     g_status_callback = callback;
     g_status_callback_arg = arg;
     ESP_LOGI(TAG, "WebSocket client STUB: status callback registered");
+}
+
+websocket_pipeline_stage_t websocket_client_get_pipeline_stage(void) {
+    return g_pipeline_stage;
+}
+
+bool websocket_client_is_pipeline_active(void) {
+    return false;
+}
+
+const char *websocket_client_pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
+    switch (stage) {
+        case WEBSOCKET_PIPELINE_STAGE_IDLE:
+            return "idle";
+        case WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION:
+            return "transcription";
+        case WEBSOCKET_PIPELINE_STAGE_LLM:
+            return "llm";
+        case WEBSOCKET_PIPELINE_STAGE_TTS:
+            return "tts";
+        case WEBSOCKET_PIPELINE_STAGE_COMPLETE:
+            return "complete";
+        default:
+            return "unknown";
+    }
 }

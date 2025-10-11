@@ -54,4 +54,34 @@ esp_err_t tts_decoder_stop(void);
  */
 bool tts_decoder_is_playing(void);
 
+/**
+ * @brief Query whether buffered audio is still pending playback
+ *
+ * @return true when queued audio remains to be rendered
+ */
+bool tts_decoder_has_pending_audio(void);
+
+/**
+ * @brief Approximate number of PCM bytes pending playback
+ *
+ * @return Remaining bytes (best-effort estimate)
+ */
+size_t tts_decoder_get_pending_bytes(void);
+
+/**
+ * @brief Wait until playback completes or timeout expires
+ *
+ * @param timeout_ms Maximum time to wait in milliseconds
+ * @return ESP_OK if drained, ESP_ERR_TIMEOUT on timeout, or error code
+ */
+esp_err_t tts_decoder_wait_for_idle(uint32_t timeout_ms);
+
+/**
+ * @brief Notify the decoder that the server finished streaming audio
+ *
+ * Queues a graceful stop sentinel allowing the playback task to exit
+ * after draining buffered audio.
+ */
+void tts_decoder_notify_end_of_stream(void);
+
 #endif // TTS_DECODER_H

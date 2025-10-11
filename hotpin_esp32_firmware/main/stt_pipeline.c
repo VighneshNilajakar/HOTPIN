@@ -298,6 +298,7 @@ static void audio_capture_task(void *pvParameters) {
         ESP_LOGE(TAG, "  Requested: %d bytes", AUDIO_CAPTURE_CHUNK_SIZE);
         ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
         ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
+        g_audio_capture_task_handle = NULL;
         vTaskDelete(NULL);
         return;
     }
@@ -389,6 +390,11 @@ static void audio_capture_task(void *pvParameters) {
     
     ESP_LOGI(TAG, "Audio capture task stopped (captured %u bytes total)", (unsigned int)total_bytes_captured);
     heap_caps_free(capture_buffer);
+
+    if (g_audio_capture_task_handle == xTaskGetCurrentTaskHandle()) {
+        g_audio_capture_task_handle = NULL;
+    }
+
     vTaskDelete(NULL);
 }
 
@@ -401,6 +407,7 @@ static void audio_streaming_task(void *pvParameters) {
     );
     if (stream_buffer == NULL) {
         ESP_LOGE(TAG, "Failed to allocate stream buffer");
+        g_audio_streaming_task_handle = NULL;
         vTaskDelete(NULL);
         return;
     }
@@ -457,6 +464,11 @@ static void audio_streaming_task(void *pvParameters) {
     ESP_LOGI(TAG, "Audio streaming task stopped (streamed %u bytes in %u chunks)", 
              (unsigned int)total_bytes_streamed, (unsigned int)chunk_count);
     heap_caps_free(stream_buffer);
+
+    if (g_audio_streaming_task_handle == xTaskGetCurrentTaskHandle()) {
+        g_audio_streaming_task_handle = NULL;
+    }
+
     vTaskDelete(NULL);
 }
 

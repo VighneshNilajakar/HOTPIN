@@ -94,8 +94,9 @@
 #define CONFIG_I2S_DMA_BUF_LEN              1200            // Samples per buffer (was 512, increased to 1200 for sustained throughput)
 
 // I2S controller assignment
-#define CONFIG_I2S_NUM_TX                   I2S_NUM_0       // Speaker output
-#define CONFIG_I2S_NUM_RX                   I2S_NUM_1       // Microphone input
+#define CONFIG_I2S_STD_PORT                 I2S_NUM_1       // Dedicated audio controller (avoids camera conflict)
+#define CONFIG_I2S_NUM_TX                   CONFIG_I2S_STD_PORT
+#define CONFIG_I2S_NUM_RX                   CONFIG_I2S_STD_PORT
 
 // Audio buffer sizes (PSRAM-backed)
 #define CONFIG_STT_RING_BUFFER_SIZE         (64 * 1024)     // 64KB for 2 seconds @ 16kHz

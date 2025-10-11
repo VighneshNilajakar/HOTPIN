@@ -20,9 +20,11 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include <string.h>
+#include <limits.h>
 
 static const char *TAG = TAG_AUDIO;
 static bool is_initialized = false;
+static uint32_t current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
 
 /**
  * @brief Global mutex for thread-safe I2S hardware access
@@ -80,6 +82,7 @@ esp_err_t audio_driver_init(void) {
     }
     
     is_initialized = true;
+    current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ ✅ MODERN I2S STD DRIVER INITIALIZED");
     ESP_LOGI(TAG, "║ Mode: Full-duplex (separate TX + RX channels)");
@@ -176,6 +179,7 @@ esp_err_t audio_driver_deinit(void) {
     
     // Mark as uninitialized
     is_initialized = false;
+    current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
     
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ ✅ Modern I2S STD Driver Deinitialized");
@@ -205,9 +209,22 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Try to acquire mutex with timeout to prevent indefinite blocking
-    if (xSemaphoreTake(g_i2s_access_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "⚠ Failed to acquire I2S access mutex within 100ms (write blocked)");
+    TickType_t mutex_wait_ticks;
+    if (timeout_ms == (uint32_t)portMAX_DELAY) {
+        mutex_wait_ticks = portMAX_DELAY;
+    } else if (timeout_ms == 0) {
+        mutex_wait_ticks = pdMS_TO_TICKS(100);
+    } else {
+        mutex_wait_ticks = pdMS_TO_TICKS(timeout_ms);
+        if (mutex_wait_ticks == 0) {
+            mutex_wait_ticks = 1;
+        }
+    }
+
+    // Try to acquire mutex with caller-aligned timeout to prevent indefinite blocking
+    if (xSemaphoreTake(g_i2s_access_mutex, mutex_wait_ticks) != pdTRUE) {
+        ESP_LOGW(TAG, "⚠ Failed to acquire I2S access mutex within %lu ms (write blocked)",
+                 (unsigned long)((timeout_ms == (uint32_t)portMAX_DELAY) ? UINT32_MAX : timeout_ms ? timeout_ms : 100));
         if (bytes_written) *bytes_written = 0;
         return ESP_ERR_TIMEOUT;
     }
@@ -215,7 +232,12 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
     // Perform I2S channel write operation (protected by mutex)
     // Modern driver uses i2s_channel_write() instead of i2s_write()
     size_t written = 0;
-    TickType_t ticks_to_wait = timeout_ms / portTICK_PERIOD_MS;
+    TickType_t ticks_to_wait;
+    if (timeout_ms == (uint32_t)portMAX_DELAY) {
+        ticks_to_wait = portMAX_DELAY;
+    } else {
+        ticks_to_wait = pdMS_TO_TICKS(timeout_ms);
+    }
     
     esp_err_t ret = i2s_channel_write(g_i2s_tx_handle, data, size, &written, ticks_to_wait);
     
@@ -321,6 +343,70 @@ esp_err_t audio_driver_clear_buffers(void) {
     return ESP_OK;
 }
 
+esp_err_t audio_driver_set_tx_sample_rate(uint32_t sample_rate) {
+    if (!is_initialized || g_i2s_tx_handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (sample_rate == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (sample_rate == current_tx_sample_rate) {
+        return ESP_OK;
+    }
+
+    if (g_i2s_access_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(g_i2s_access_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "⚠ Failed to acquire I2S mutex for clock update");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    uint32_t previous_rate = current_tx_sample_rate;
+    esp_err_t ret = i2s_channel_disable(g_i2s_tx_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Unable to disable TX channel for clock update: %s", esp_err_to_name(ret));
+        xSemaphoreGive(g_i2s_access_mutex);
+        return ret;
+    }
+
+    i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+    clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
+    ret = i2s_channel_reconfig_std_clock(g_i2s_tx_handle, &clk_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Failed to reconfigure TX clock to %u Hz: %s", (unsigned int)sample_rate, esp_err_to_name(ret));
+        goto restore_previous_clock;
+    }
+
+    ret = i2s_channel_enable(g_i2s_tx_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Unable to re-enable TX channel after clock update: %s", esp_err_to_name(ret));
+        goto restore_previous_clock;
+    }
+
+    current_tx_sample_rate = sample_rate;
+    xSemaphoreGive(g_i2s_access_mutex);
+    ESP_LOGI(TAG, "I2S TX sample rate updated to %u Hz", (unsigned int)sample_rate);
+    return ESP_OK;
+
+restore_previous_clock:
+    {
+        i2s_std_clk_config_t restore_cfg = I2S_STD_CLK_DEFAULT_CONFIG(previous_rate);
+        restore_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
+        i2s_channel_reconfig_std_clock(g_i2s_tx_handle, &restore_cfg);
+        i2s_channel_enable(g_i2s_tx_handle);
+    }
+    xSemaphoreGive(g_i2s_access_mutex);
+    return ret;
+}
+
+uint32_t audio_driver_get_tx_sample_rate(void) {
+    return current_tx_sample_rate;
+}
+
 // ===========================
 // Private Functions
 // ===========================
@@ -343,9 +429,9 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     
     // STEP 1: Create I2S channel configuration for full-duplex (separate TX and RX)
     ESP_LOGI(TAG, "[STEP 1/6] Creating I2S channel pair (TX + RX)...");
-    ESP_LOGI(TAG, "  Using I2S_NUM_0 for both channels (full-duplex mode)");
+    ESP_LOGI(TAG, "  Using I2S controller %d for both channels (full-duplex mode)", CONFIG_I2S_STD_PORT);
     
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_I2S_STD_PORT, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = CONFIG_I2S_DMA_BUF_COUNT;
     chan_cfg.dma_frame_num = CONFIG_I2S_DMA_BUF_LEN;
     chan_cfg.auto_clear = true;  // Auto-clear TX buffer on underflow

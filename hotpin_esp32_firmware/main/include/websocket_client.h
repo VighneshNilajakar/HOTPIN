@@ -35,6 +35,14 @@ typedef enum {
     WEBSOCKET_STATUS_ERROR
 } websocket_status_t;
 
+typedef enum {
+    WEBSOCKET_PIPELINE_STAGE_IDLE = 0,
+    WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION,
+    WEBSOCKET_PIPELINE_STAGE_LLM,
+    WEBSOCKET_PIPELINE_STAGE_TTS,
+    WEBSOCKET_PIPELINE_STAGE_COMPLETE,
+} websocket_pipeline_stage_t;
+
 /**
  * @brief Callback for WebSocket status changes
  * 
@@ -130,5 +138,9 @@ void websocket_client_set_audio_callback(websocket_audio_callback_t callback, vo
  * @param arg User argument passed to callback
  */
 void websocket_client_set_status_callback(websocket_status_callback_t callback, void *arg);
+
+websocket_pipeline_stage_t websocket_client_get_pipeline_stage(void);
+bool websocket_client_is_pipeline_active(void);
+const char *websocket_client_pipeline_stage_to_string(websocket_pipeline_stage_t stage);
 
 #endif // WEBSOCKET_CLIENT_H

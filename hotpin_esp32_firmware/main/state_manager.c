@@ -12,6 +12,7 @@
 #include "config.h"
 #include "camera_controller.h"
 #include "audio_driver.h"
+#include "audio_feedback.h"
 #include "stt_pipeline.h"
 #include "tts_decoder.h"
 #include "websocket_client.h"
@@ -44,6 +45,9 @@ static TaskHandle_t tts_task_handle = NULL;
 
 // Transition timeout
 #define STATE_TRANSITION_TIMEOUT_MS    5000
+#define VOICE_PIPELINE_STAGE_WAIT_MS   20000
+#define VOICE_PIPELINE_STAGE_GUARD_MS  1500
+#define VOICE_TTS_FLUSH_WAIT_MS        5000
 
 // ===========================
 // Private Function Declarations
@@ -54,6 +58,7 @@ static esp_err_t handle_camera_capture(void);
 static esp_err_t handle_shutdown(void);
 static void handle_error_state(void);
 static const char* state_to_string(system_state_t state);
+static void wait_for_voice_pipeline_shutdown(void);
 
 // ===========================
 // Public Functions
@@ -182,6 +187,7 @@ void state_manager_task(void *pvParameters) {
             case SYSTEM_STATE_SHUTDOWN:
                 ESP_LOGW(TAG, "Shutdown state reached");
                 handle_shutdown();
+                esp_task_wdt_delete(NULL);
                 // Task will be deleted after shutdown
                 vTaskDelete(NULL);
                 break;
@@ -227,6 +233,71 @@ esp_err_t state_manager_request_transition(system_state_t new_state) {
 // Private Functions
 // ===========================
 
+static void wait_for_voice_pipeline_shutdown(void) {
+    TickType_t guard_start = xTaskGetTickCount();
+    const TickType_t guard_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_GUARD_MS);
+
+    // Guard window: allow the server to transition into an active stage after EOS
+    while (!websocket_client_is_pipeline_active()) {
+        websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
+        if (stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+            return;  // Already complete, nothing to wait for
+        }
+
+        if ((xTaskGetTickCount() - guard_start) >= guard_timeout) {
+            break;
+        }
+
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    const TickType_t overall_start = xTaskGetTickCount();
+    const TickType_t overall_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_WAIT_MS);
+
+    while (true) {
+        websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
+        bool pipeline_active = websocket_client_is_pipeline_active();
+
+        if (!pipeline_active) {
+            if (stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+                ESP_LOGI(TAG, "Voice pipeline reported COMPLETE");
+            } else {
+                ESP_LOGI(TAG, "Voice pipeline became idle at stage %s",
+                         websocket_client_pipeline_stage_to_string(stage));
+            }
+            break;
+        }
+
+        if ((xTaskGetTickCount() - overall_start) >= overall_timeout) {
+            ESP_LOGW(TAG, "Voice pipeline still active (%s) after %u ms",
+                     websocket_client_pipeline_stage_to_string(stage),
+                     (unsigned int)VOICE_PIPELINE_STAGE_WAIT_MS);
+            break;
+        }
+
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    if (tts_decoder_has_pending_audio()) {
+        size_t pending_bytes = tts_decoder_get_pending_bytes();
+        ESP_LOGI(TAG, "Waiting for TTS playback drain (~%zu bytes pending, timeout %u ms)",
+                 pending_bytes, (unsigned int)VOICE_TTS_FLUSH_WAIT_MS);
+
+        esp_err_t wait_ret = tts_decoder_wait_for_idle(VOICE_TTS_FLUSH_WAIT_MS);
+        if (wait_ret == ESP_OK) {
+            ESP_LOGI(TAG, "TTS playback drained successfully");
+        } else if (wait_ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG, "TTS playback drain timed out; proceeding with shutdown");
+        } else if (wait_ret == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "TTS decoder not initialized while waiting for drain");
+        } else {
+            ESP_LOGE(TAG, "Error while waiting for TTS drain: %s", esp_err_to_name(wait_ret));
+        }
+    }
+}
+
 static esp_err_t transition_to_camera_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO CAMERA MODE ===");
     
@@ -236,9 +307,17 @@ static esp_err_t transition_to_camera_mode(void) {
     if (previous_state == SYSTEM_STATE_VOICE_ACTIVE) {
         ESP_LOGI(TAG, "Stopping voice mode components...");
         
-        // Stop STT and TTS pipelines
+        // Stop STT pipeline and wait for downstream playback to drain
         stt_pipeline_stop();
+        wait_for_voice_pipeline_shutdown();
         tts_decoder_stop();
+
+        esp_err_t feedback_ret = audio_feedback_beep_double(false);
+        if (feedback_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Recording stop feedback failed: %s", esp_err_to_name(feedback_ret));
+        } else {
+            ESP_LOGI(TAG, "🔔 Recording stop feedback dispatched");
+        }
         
         // Small delay for tasks to finish
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -287,6 +366,7 @@ static esp_err_t handle_camera_capture(void) {
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
         ESP_LOGI(TAG, "Stopping STT/TTS tasks...");
         stt_pipeline_stop();
+        wait_for_voice_pipeline_shutdown();
         tts_decoder_stop();
         vTaskDelay(pdMS_TO_TICKS(100));  // Allow tasks to clean up
     }
@@ -376,6 +456,13 @@ static esp_err_t handle_camera_capture(void) {
     }
     
     ESP_LOGI(TAG, "Frame captured: %zu bytes", fb->len);
+
+    esp_err_t capture_feedback = audio_feedback_beep_single(true);
+    if (capture_feedback != ESP_OK) {
+        ESP_LOGW(TAG, "Capture feedback failed: %s", esp_err_to_name(capture_feedback));
+    } else {
+        ESP_LOGI(TAG, "🔔 Capture feedback dispatched");
+    }
     
     // Step 6: Generate session ID and upload
     char session_id[64];
@@ -392,6 +479,12 @@ static esp_err_t handle_camera_capture(void) {
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Image uploaded successfully");
         // TODO: Parse response for beep trigger if server sends one
+        esp_err_t upload_feedback = audio_feedback_beep_double(true);
+        if (upload_feedback != ESP_OK) {
+            ESP_LOGW(TAG, "Upload feedback failed: %s", esp_err_to_name(upload_feedback));
+        } else {
+            ESP_LOGI(TAG, "🔔 Upload feedback dispatched");
+        }
     } else {
         ESP_LOGE(TAG, "Image upload failed: %s", esp_err_to_name(ret));
     }
@@ -435,6 +528,13 @@ restore_audio:
         stt_pipeline_start();
         tts_decoder_start();
         ESP_LOGI(TAG, "✅ Audio pipelines restarted");
+
+        esp_err_t resume_feedback = audio_feedback_beep_single(false);
+        if (resume_feedback != ESP_OK) {
+            ESP_LOGW(TAG, "Resume feedback failed: %s", esp_err_to_name(resume_feedback));
+        } else {
+            ESP_LOGI(TAG, "🔔 Recording resume feedback dispatched");
+        }
     }
     
     // Release mutex
@@ -545,6 +645,13 @@ static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ STEP 6: Starting STT/TTS pipelines");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
+
+    esp_err_t feedback_ret = audio_feedback_beep_single(false);
+    if (feedback_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Recording start feedback failed: %s", esp_err_to_name(feedback_ret));
+    } else {
+        ESP_LOGI(TAG, "🔔 Recording start feedback dispatched");
+    }
     
     ret = stt_pipeline_start();
     if (ret != ESP_OK) {

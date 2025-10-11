@@ -7,6 +7,7 @@ idf_component_register(
         "main.c"
         "button_handler.c"
         "camera_controller.c"
+    "audio_feedback.c"
         "audio_driver.c"
         "websocket_client.c"
         "state_manager.c"
@@ -46,6 +47,7 @@ set_source_files_properties(
     main.c
     button_handler.c
     camera_controller.c
+    audio_feedback.c
     audio_driver.c
     websocket_client.c
     state_manager.c

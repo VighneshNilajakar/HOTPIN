@@ -13,6 +13,7 @@
 
 #include "websocket_client.h"
 #include "config.h"
+#include "tts_decoder.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
 #include "cJSON.h"
@@ -25,6 +26,7 @@ static esp_websocket_client_handle_t g_ws_client = NULL;
 static bool is_connected = false;
 static bool is_initialized = false;
 static char server_uri[128] = {0};
+static volatile websocket_pipeline_stage_t g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 
 // Callback function pointer for incoming WAV audio data
 static websocket_audio_callback_t g_audio_callback = NULL;
@@ -41,6 +43,8 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
                                      int32_t event_id, void *event_data);
 static void handle_text_message(const char *data, size_t len);
 static void handle_binary_message(const uint8_t *data, size_t len);
+static void update_pipeline_stage(const char *status, const char *stage);
+static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage);
 
 // ===========================
 // Public Functions
@@ -175,17 +179,23 @@ esp_err_t websocket_client_disconnect(void) {
     }
     
     esp_err_t ret = esp_websocket_client_close(g_ws_client, portMAX_DELAY);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "Failed to close WebSocket: %s", esp_err_to_name(ret));
     }
     
     ret = esp_websocket_client_stop(g_ws_client);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to stop WebSocket client: %s", esp_err_to_name(ret));
-        return ret;
+        if (ret == ESP_ERR_INVALID_STATE || ret == ESP_FAIL) {
+            ESP_LOGW(TAG, "WebSocket client stop reported %s, continuing cleanup",
+                     esp_err_to_name(ret));
+        } else {
+            ESP_LOGE(TAG, "Failed to stop WebSocket client: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
     
     is_connected = false;
+    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     ESP_LOGI(TAG, "WebSocket disconnected");
     
     return ESP_OK;
@@ -304,6 +314,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
         case WEBSOCKET_EVENT_CONNECTED:
             ESP_LOGI(TAG, "✅ WebSocket connected to server");
             is_connected = true;
+            g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
             
             // Send handshake immediately after connection
             websocket_client_send_handshake();
@@ -316,6 +327,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
         case WEBSOCKET_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "⚠️ WebSocket disconnected");
             is_connected = false;
+            g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
             
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_DISCONNECTED, g_status_callback_arg);
@@ -334,6 +346,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             
         case WEBSOCKET_EVENT_ERROR:
             ESP_LOGE(TAG, "❌ WebSocket error occurred");
+            g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
             
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_ERROR, g_status_callback_arg);
@@ -366,9 +379,19 @@ static void handle_text_message(const char *data, size_t len) {
     
     // Check for status field
     cJSON *status = cJSON_GetObjectItem(root, "status");
-    if (status != NULL && cJSON_IsString(status)) {
-        ESP_LOGI(TAG, "Server status: %s", status->valuestring);
+    cJSON *stage = cJSON_GetObjectItem(root, "stage");
+    const char *status_str = (status != NULL && cJSON_IsString(status)) ? status->valuestring : NULL;
+    const char *stage_str = (stage != NULL && cJSON_IsString(stage)) ? stage->valuestring : NULL;
+
+    if (status_str != NULL) {
+        ESP_LOGI(TAG, "Server status: %s", status_str);
     }
+
+    if (stage_str != NULL) {
+        ESP_LOGI(TAG, "Server stage: %s", stage_str);
+    }
+
+    update_pipeline_stage(status_str, stage_str);
     
     // Check for transcription result
     cJSON *transcription = cJSON_GetObjectItem(root, "transcription");
@@ -388,4 +411,73 @@ static void handle_binary_message(const uint8_t *data, size_t len) {
     } else {
         ESP_LOGW(TAG, "No audio callback registered - audio data discarded");
     }
+}
+
+static void update_pipeline_stage(const char *status, const char *stage) {
+    if (status == NULL) {
+        return;
+    }
+
+    websocket_pipeline_stage_t new_stage = g_pipeline_stage;
+    bool notify_eos = false;
+
+    if (strcmp(status, "complete") == 0) {
+        new_stage = WEBSOCKET_PIPELINE_STAGE_COMPLETE;
+        notify_eos = true;
+    } else if (strcmp(status, "processing") == 0) {
+        if (stage != NULL) {
+            if (strcmp(stage, "transcription") == 0) {
+                new_stage = WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
+            } else if (strcmp(stage, "llm") == 0) {
+                new_stage = WEBSOCKET_PIPELINE_STAGE_LLM;
+            } else if (strcmp(stage, "tts") == 0) {
+                new_stage = WEBSOCKET_PIPELINE_STAGE_TTS;
+            }
+        }
+    } else if (strcmp(status, "idle") == 0) {
+        new_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+    }
+
+    if (new_stage != g_pipeline_stage) {
+        ESP_LOGI(TAG, "Pipeline stage changed: %s -> %s",
+                 pipeline_stage_to_string(g_pipeline_stage),
+                 pipeline_stage_to_string(new_stage));
+        g_pipeline_stage = new_stage;
+    }
+
+    if (notify_eos) {
+        tts_decoder_notify_end_of_stream();
+    }
+}
+
+static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
+    switch (stage) {
+        case WEBSOCKET_PIPELINE_STAGE_IDLE:
+            return "idle";
+        case WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION:
+            return "transcription";
+        case WEBSOCKET_PIPELINE_STAGE_LLM:
+            return "llm";
+        case WEBSOCKET_PIPELINE_STAGE_TTS:
+            return "tts";
+        case WEBSOCKET_PIPELINE_STAGE_COMPLETE:
+            return "complete";
+        default:
+            return "unknown";
+    }
+}
+
+websocket_pipeline_stage_t websocket_client_get_pipeline_stage(void) {
+    return g_pipeline_stage;
+}
+
+bool websocket_client_is_pipeline_active(void) {
+    websocket_pipeline_stage_t stage = g_pipeline_stage;
+    return stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION ||
+           stage == WEBSOCKET_PIPELINE_STAGE_LLM ||
+           stage == WEBSOCKET_PIPELINE_STAGE_TTS;
+}
+
+const char *websocket_client_pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
+    return pipeline_stage_to_string(stage);
 }
