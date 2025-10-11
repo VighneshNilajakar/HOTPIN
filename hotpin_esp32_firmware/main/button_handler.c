@@ -27,6 +27,7 @@ static QueueHandle_t button_event_queue = NULL;
 static TimerHandle_t debounce_timer = NULL;
 static TimerHandle_t long_press_timer = NULL;
 static TimerHandle_t double_click_timer = NULL;
+static bool s_isr_service_installed = false;
 
 // FSM state
 static button_state_t current_state = BUTTON_STATE_IDLE;
@@ -106,10 +107,17 @@ esp_err_t button_handler_init(QueueHandle_t event_queue_handle) {
     }
     
     // Install GPIO ISR service and add handler
-    ret = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {  // Already installed is OK
-        ESP_LOGE(TAG, "Failed to install ISR service: %s", esp_err_to_name(ret));
-        return ret;
+    if (!s_isr_service_installed) {
+        ret = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
+        if (ret == ESP_OK) {
+            s_isr_service_installed = true;
+        } else if (ret == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "GPIO ISR service already installed (shared)" );
+            s_isr_service_installed = true;
+        } else {
+            ESP_LOGE(TAG, "Failed to install ISR service: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
     
     ret = gpio_isr_handler_add(CONFIG_PUSH_BUTTON_GPIO, button_isr_handler, NULL);
@@ -141,6 +149,10 @@ esp_err_t button_handler_deinit(void) {
     
     current_state = BUTTON_STATE_IDLE;
     return ESP_OK;
+}
+
+bool button_handler_isr_service_installed(void) {
+    return s_isr_service_installed;
 }
 
 button_state_t button_handler_get_state(void) {

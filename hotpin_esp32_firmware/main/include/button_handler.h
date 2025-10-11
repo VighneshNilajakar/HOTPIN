@@ -95,4 +95,9 @@ uint32_t button_handler_get_press_count(void);
  */
 void button_handler_reset(void);
 
+/**
+ * @brief Returns true if the shared GPIO ISR service has been installed.
+ */
+bool button_handler_isr_service_installed(void);
+
 #endif // BUTTON_HANDLER_H

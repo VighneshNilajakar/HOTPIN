@@ -31,13 +31,13 @@
 #include "esp_task_wdt.h"
 #include "esp_psram.h"
 #include "soc/rtc_cntl_reg.h"
-#include "driver/gpio.h"
 #include "driver/rtc_io.h"
 
 #include "config.h"
 #include "button_handler.h"
 #include "camera_controller.h"
 #include "audio_driver.h"
+#include "feedback_player.h"
 #include "websocket_client.h"
 #include "state_manager.h"
 #include "stt_pipeline.h"
@@ -52,6 +52,7 @@
 // ===========================
 static void websocket_status_callback(websocket_status_t status, void *arg);
 static void websocket_connection_task(void *pvParameters);
+static void websocket_connection_cleanup(void);
 
 // ===========================
 // Global Variables
@@ -167,7 +168,8 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Initializing LED controller...");
     ESP_ERROR_CHECK(led_controller_init());
-    led_controller_set_state(LED_STATE_WIFI_CONNECTING);
+    ESP_ERROR_CHECK(feedback_player_init());
+    ESP_ERROR_CHECK(led_controller_set_state(LED_STATE_FAST_BLINK));
     
     ESP_LOGI(TAG, "Initializing WebSocket client...");
     ESP_ERROR_CHECK(websocket_client_init(WS_SERVER_URI, CONFIG_AUTH_BEARER_TOKEN));
@@ -238,7 +240,10 @@ void app_main(void) {
         .idle_core_mask = 0,  // Don't watch idle tasks
         .trigger_panic = true  // Panic on timeout
     };
-    esp_task_wdt_init(&wdt_config);
+
+    // Ensure prior watchdog instances are cleared to avoid duplicate init warnings.
+    esp_task_wdt_deinit();
+    ESP_ERROR_CHECK(esp_task_wdt_init(&wdt_config));
     
     // Subscribe state manager task
     if (g_state_manager_task_handle != NULL) {
@@ -262,10 +267,13 @@ void app_main(void) {
     ESP_LOGI(TAG, "System initialization complete!");
     ESP_LOGI(TAG, "Entering camera standby mode...");
     ESP_LOGI(TAG, "====================================");
-    
-    // Configure status LED (GPIO 2) to indicate system ready
-    gpio_set_direction(CONFIG_STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(CONFIG_STATUS_LED_GPIO, 1);  // LED ON = System ready
+
+    esp_err_t boot_feedback_ret = feedback_player_play(FEEDBACK_SOUND_BOOT);
+    if (boot_feedback_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Boot feedback playback failed: %s", esp_err_to_name(boot_feedback_ret));
+    }
+
+    ESP_ERROR_CHECK(led_controller_set_state(LED_STATE_BREATHING));
     
     // Main task complete - FreeRTOS scheduler continues
     ESP_LOGI(TAG, "Main task exiting - system running");
@@ -500,13 +508,9 @@ static void websocket_connection_task(void *pvParameters) {
 
 task_shutdown:
     ESP_LOGI(TAG, "WebSocket connection task shutting down");
+    websocket_connection_cleanup();
     if (g_websocket_event_group != NULL) {
         xEventGroupClearBits(g_websocket_event_group, WS_EVENT_SHUTDOWN);
-    }
-    if (g_websocket_connected) {
-        websocket_client_disconnect();
-        g_websocket_connected = false;
-        vTaskDelay(pdMS_TO_TICKS(200));
     }
     g_websocket_task_handle = NULL;
     vTaskDelete(NULL);
@@ -518,12 +522,43 @@ void websocket_connection_request_shutdown(void) {
     }
 }
 
+static void websocket_connection_cleanup(void) {
+    bool attempted_disconnect = false;
+    bool client_connected = websocket_client_is_connected();
+
+    if (client_connected) {
+        ESP_LOGI(TAG, "Initiating WebSocket client disconnect");
+        esp_err_t ret = websocket_client_disconnect();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "WebSocket client disconnect returned %s", esp_err_to_name(ret));
+        }
+        attempted_disconnect = true;
+    }
+
+    for (int i = 0; i < 20 && websocket_client_is_connected(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    if (websocket_client_is_connected()) {
+        ESP_LOGW(TAG, "WebSocket still connected after graceful attempt - force stopping");
+        esp_err_t stop_ret = websocket_client_force_stop();
+        if (stop_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Force stop returned %s", esp_err_to_name(stop_ret));
+        }
+    } else if (attempted_disconnect) {
+        ESP_LOGI(TAG, "WebSocket disconnect acknowledged");
+    }
+
+    g_websocket_connected = websocket_client_is_connected();
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data) {
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
             case WIFI_EVENT_STA_START:
                 ESP_LOGI(TAG, "WiFi station started, connecting...");
+                led_controller_set_state(LED_STATE_FAST_BLINK);
                 if (g_websocket_event_group != NULL) {
                     xEventGroupClearBits(g_websocket_event_group,
                                          WS_EVENT_WIFI_READY);
@@ -535,6 +570,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 ESP_LOGW(TAG, "WiFi disconnected, retrying...");
                 g_wifi_connected = false;
                 g_websocket_connected = false;
+                led_controller_set_state(LED_STATE_FAST_BLINK);
                 if (g_websocket_event_group != NULL) {
                     xEventGroupClearBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
                 }
@@ -554,7 +590,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         
         // Set WiFi connected flag
         g_wifi_connected = true;
-        led_controller_set_state(LED_STATE_WIFI_CONNECTED);
+        if (state_manager_get_state() != SYSTEM_STATE_VOICE_ACTIVE) {
+            led_controller_set_state(LED_STATE_BREATHING);
+        }
         if (g_websocket_event_group != NULL) {
             xEventGroupSetBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
         }

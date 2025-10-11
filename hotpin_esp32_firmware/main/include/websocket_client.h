@@ -86,6 +86,16 @@ esp_err_t websocket_client_connect(void);
 esp_err_t websocket_client_disconnect(void);
 
 /**
+ * @brief Force-stop the WebSocket client regardless of connection state
+ *
+ * Useful for shutdown paths where the remote side has already disconnected and
+ * the client may report ESP_FAIL when attempting a graceful stop.
+ *
+ * @return ESP_OK on success or if the client was already stopped
+ */
+esp_err_t websocket_client_force_stop(void);
+
+/**
  * @brief Send binary PCM audio data
  * 
  * @param data PCM audio buffer

@@ -12,7 +12,7 @@
 #include "config.h"
 #include "camera_controller.h"
 #include "audio_driver.h"
-#include "audio_feedback.h"
+#include "feedback_player.h"
 #include "stt_pipeline.h"
 #include "tts_decoder.h"
 #include "websocket_client.h"
@@ -77,6 +77,7 @@ void state_manager_task(void *pvParameters) {
     if (transition_to_camera_mode() == ESP_OK) {
         current_state = SYSTEM_STATE_CAMERA_STANDBY;
         ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
+        led_controller_set_state(LED_STATE_BREATHING);
     } else {
         ESP_LOGE(TAG, "❌ Failed to initialize camera - entering error state");
         current_state = SYSTEM_STATE_ERROR;
@@ -132,23 +133,16 @@ void state_manager_task(void *pvParameters) {
                         
                     case BUTTON_EVENT_DOUBLE_CLICK:
                         ESP_LOGI(TAG, "Double-click detected - triggering camera capture");
-                        
-                        // Update LED to indicate camera activity
-                        led_controller_set_state(LED_STATE_WIFI_CONNECTED);
-                        
-                        // Execute camera capture sequence
+
                         ret = handle_camera_capture();
                         if (ret != ESP_OK) {
                             ESP_LOGE(TAG, "Camera capture sequence failed");
-                            led_controller_set_state(LED_STATE_ERROR);
+                            led_controller_set_state(LED_STATE_SOS);
                             vTaskDelay(pdMS_TO_TICKS(2000));
-                        }
-                        
-                        // Restore LED state based on current system state
-                        if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-                            led_controller_set_state(LED_STATE_RECORDING);
-                        } else {
-                            led_controller_set_state(LED_STATE_WIFI_CONNECTED);
+                            led_state_t recovery_state =
+                                (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
+                                LED_STATE_SOLID : LED_STATE_BREATHING;
+                            led_controller_set_state(recovery_state);
                         }
                         break;
                         
@@ -314,13 +308,6 @@ static esp_err_t transition_to_camera_mode(void) {
         wait_for_voice_pipeline_shutdown();
         tts_decoder_stop();
 
-        esp_err_t feedback_ret = audio_feedback_beep_double(false);
-        if (feedback_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Recording stop feedback failed: %s", esp_err_to_name(feedback_ret));
-        } else {
-            ESP_LOGI(TAG, "🔔 Recording stop feedback dispatched");
-        }
-        
         // Small delay for tasks to finish
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -357,6 +344,15 @@ static esp_err_t transition_to_camera_mode(void) {
     ESP_LOGI(TAG, "I2S mutex released");
     
     ESP_LOGI(TAG, "✅ Camera mode transition complete");
+
+    if (previous_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        esp_err_t stop_sound_ret = feedback_player_play(FEEDBACK_SOUND_REC_STOP);
+        if (stop_sound_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Voice stop feedback failed: %s", esp_err_to_name(stop_sound_ret));
+        }
+        led_controller_set_state(LED_STATE_BREATHING);
+    }
+
     return ESP_OK;
 }
 
@@ -371,11 +367,6 @@ static esp_err_t capture_and_upload_image(void) {
 
     ESP_LOGI(TAG, "Frame captured: %zu bytes", fb->len);
 
-    esp_err_t capture_feedback = audio_feedback_beep_single(true);
-    if (capture_feedback != ESP_OK) {
-        ESP_LOGW(TAG, "Capture feedback failed: %s", esp_err_to_name(capture_feedback));
-    }
-
     char session_id[64];
     json_protocol_generate_session_id(session_id, sizeof(session_id));
 
@@ -388,10 +379,6 @@ static esp_err_t capture_and_upload_image(void) {
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Image uploaded successfully");
-        esp_err_t upload_feedback = audio_feedback_beep_double(true);
-        if (upload_feedback != ESP_OK) {
-            ESP_LOGW(TAG, "Upload feedback failed: %s", esp_err_to_name(upload_feedback));
-        }
     } else {
         ESP_LOGE(TAG, "Image upload failed: %s", esp_err_to_name(ret));
     }
@@ -401,6 +388,18 @@ static esp_err_t capture_and_upload_image(void) {
 
 static esp_err_t handle_camera_capture(void) {
     ESP_LOGI(TAG, "Starting camera capture sequence");
+
+    led_controller_set_state(LED_STATE_FLASH);
+    esp_err_t capture_sound_ret = feedback_player_play(FEEDBACK_SOUND_CAPTURE);
+    if (capture_sound_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Capture sound playback failed: %s", esp_err_to_name(capture_sound_ret));
+    }
+
+    bool capture_success = false;
+    esp_err_t ret = ESP_OK;
+    bool voice_pipeline_paused = false;
+    bool audio_was_initialized = false;
+    bool camera_initialized_here = false;
 
     // Fast path when camera is already armed
     if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
@@ -412,17 +411,18 @@ static esp_err_t handle_camera_capture(void) {
                 return init_ret;
             }
         }
-        return capture_and_upload_image();
+        ret = capture_and_upload_image();
+        capture_success = (ret == ESP_OK);
+        goto finalize_capture;
     }
 
     // If another state requested capture, try without touching audio path
     if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
         ESP_LOGW(TAG, "Camera capture requested during %s", state_to_string(current_state));
-        return capture_and_upload_image();
+        ret = capture_and_upload_image();
+        capture_success = (ret == ESP_OK);
+        goto finalize_capture;
     }
-
-    bool voice_pipeline_paused = false;
-    esp_err_t ret = ESP_OK;
 
     ESP_LOGI(TAG, "Pausing voice pipelines prior to capture");
     stt_pipeline_stop();
@@ -441,8 +441,7 @@ static esp_err_t handle_camera_capture(void) {
         return ESP_ERR_TIMEOUT;
     }
 
-    bool audio_was_initialized = audio_driver_is_initialized();
-    bool camera_initialized_here = false;
+    audio_was_initialized = audio_driver_is_initialized();
 
     if (audio_was_initialized) {
         ESP_LOGI(TAG, "Stopping audio driver before camera activation");
@@ -465,6 +464,7 @@ static esp_err_t handle_camera_capture(void) {
     }
 
     ret = capture_and_upload_image();
+    capture_success = (ret == ESP_OK);
 
 restore_voice_path:
     if (camera_initialized_here) {
@@ -484,11 +484,6 @@ restore_voice_path:
             } else {
                 stt_pipeline_start();
                 tts_decoder_start();
-
-                esp_err_t resume_feedback = audio_feedback_beep_single(false);
-                if (resume_feedback != ESP_OK) {
-                    ESP_LOGW(TAG, "Resume feedback failed: %s", esp_err_to_name(resume_feedback));
-                }
             }
         } else {
             // Audio driver was already offline; just restart pipelines
@@ -498,6 +493,14 @@ restore_voice_path:
     }
 
     xSemaphoreGive(g_i2s_config_mutex);
+    goto finalize_capture;
+
+finalize_capture:
+    if (capture_success) {
+        led_state_t next_led = (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
+                               LED_STATE_SOLID : LED_STATE_BREATHING;
+        led_controller_set_state(next_led);
+    }
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Camera capture sequence complete");
@@ -608,13 +611,6 @@ static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "║ STEP 6: Starting STT/TTS pipelines");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
 
-    esp_err_t feedback_ret = audio_feedback_beep_single(false);
-    if (feedback_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Recording start feedback failed: %s", esp_err_to_name(feedback_ret));
-    } else {
-        ESP_LOGI(TAG, "🔔 Recording start feedback dispatched");
-    }
-    
     ret = stt_pipeline_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start STT pipeline: %s", esp_err_to_name(ret));
@@ -625,6 +621,12 @@ static esp_err_t transition_to_voice_mode(void) {
         ESP_LOGE(TAG, "Failed to start TTS decoder: %s", esp_err_to_name(ret));
     }
     
+    esp_err_t start_sound_ret = feedback_player_play(FEEDBACK_SOUND_REC_START);
+    if (start_sound_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Voice start feedback failed: %s", esp_err_to_name(start_sound_ret));
+    }
+    led_controller_set_state(LED_STATE_SOLID);
+    
     ESP_LOGI(TAG, "✅ Voice mode transition complete");
     return ESP_OK;
 }
@@ -632,6 +634,16 @@ static esp_err_t transition_to_voice_mode(void) {
 static esp_err_t handle_shutdown(void) {
     ESP_LOGW(TAG, "=== SYSTEM SHUTDOWN ===");
     
+    esp_err_t shutdown_sound_ret = feedback_player_play(FEEDBACK_SOUND_SHUTDOWN);
+    if (shutdown_sound_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Shutdown feedback failed: %s", esp_err_to_name(shutdown_sound_ret));
+    }
+    led_controller_set_state(LED_STATE_SOLID);
+    vTaskDelay(pdMS_TO_TICKS(600));
+    led_controller_set_state(LED_STATE_BREATHING);
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    led_controller_set_state(LED_STATE_OFF);
+
     // Stop all ongoing operations
     ESP_LOGI(TAG, "Stopping all subsystems...");
     
@@ -671,7 +683,17 @@ static void handle_error_state(void) {
     
     // Attempt recovery based on previous state
     static uint32_t error_count = 0;
+    static uint32_t last_signaled_error = 0;
     error_count++;
+
+    if (error_count != last_signaled_error) {
+        led_controller_set_state(LED_STATE_SOS);
+        esp_err_t error_sound_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+        if (error_sound_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Error feedback failed: %s", esp_err_to_name(error_sound_ret));
+        }
+        last_signaled_error = error_count;
+    }
     
     if (error_count > 3) {
         ESP_LOGE(TAG, "Too many errors (%u) - entering shutdown", (unsigned int)error_count);
@@ -686,6 +708,7 @@ static void handle_error_state(void) {
     if (transition_to_camera_mode() == ESP_OK) {
         current_state = SYSTEM_STATE_CAMERA_STANDBY;
         error_count = 0;  // Reset error count on success
+        last_signaled_error = 0;
         ESP_LOGI(TAG, "✅ Recovery successful - back to camera mode");
     } else {
         current_state = SYSTEM_STATE_ERROR;

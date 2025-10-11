@@ -334,6 +334,12 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Receive message (can be binary audio or text signal)
             message = await websocket.receive()
+
+            message_type = message.get("type")
+            if message_type == "websocket.disconnect":
+                code = message.get("code", 1000)
+                print(f"🔌 [{session_id}] WebSocket disconnect received (code={code})")
+                break
             
             # Handle binary audio data
             if "bytes" in message:

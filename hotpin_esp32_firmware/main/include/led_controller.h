@@ -2,11 +2,13 @@
  * @file led_controller.h
  * @brief LED status indicator controller
  * 
- * Provides visual feedback for system states:
- * - WiFi: Blinking while connecting, solid when connected
- * - Recording: Solid during voice capture
- * - Playback: Pulsing during TTS playback
- * - Error: Fast blinking on errors
+ * Provides non-blocking LED patterns for system feedback:
+ * - Fast blink during boot/connection
+ * - Breathing pulse while idle/standby
+ * - Solid on for active voice capture
+ * - Rhythmic pulsing while processing
+ * - SOS cadence for critical faults
+ * - Single flash for capture events
  */
 
 #ifndef LED_CONTROLLER_H
@@ -17,11 +19,12 @@
 
 typedef enum {
     LED_STATE_OFF = 0,
-    LED_STATE_WIFI_CONNECTING,      // Slow blink (500ms on/off)
-    LED_STATE_WIFI_CONNECTED,       // Solid on
-    LED_STATE_RECORDING,            // Solid on (bright)
-    LED_STATE_PLAYBACK,             // Pulsing (PWM fade in/out)
-    LED_STATE_ERROR                 // Fast blink (100ms on/off)
+    LED_STATE_SOLID,
+    LED_STATE_FAST_BLINK,
+    LED_STATE_BREATHING,
+    LED_STATE_PULSING,
+    LED_STATE_SOS,
+    LED_STATE_FLASH
 } led_state_t;
 
 /**

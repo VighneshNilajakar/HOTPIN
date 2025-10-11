@@ -14,6 +14,8 @@
 #include "websocket_client.h"
 #include "config.h"
 #include "tts_decoder.h"
+#include "led_controller.h"
+#include "state_manager.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
 #include "cJSON.h"
@@ -25,6 +27,7 @@ static const char *TAG = TAG_WEBSOCKET;
 static esp_websocket_client_handle_t g_ws_client = NULL;
 static bool is_connected = false;
 static bool is_initialized = false;
+static bool is_started = false;
 static char server_uri[128] = {0};
 static volatile websocket_pipeline_stage_t g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 
@@ -104,6 +107,7 @@ esp_err_t websocket_client_init(const char *uri, const char *auth_token) {
         return ret;
     }
     
+    is_started = false;
     is_initialized = true;
     ESP_LOGI(TAG, "✅ WebSocket client initialized");
     
@@ -134,6 +138,7 @@ esp_err_t websocket_client_deinit(void) {
     }
     
     is_connected = false;
+    is_started = false;
     is_initialized = false;
     g_audio_callback = NULL;
     g_status_callback = NULL;
@@ -162,6 +167,7 @@ esp_err_t websocket_client_connect(void) {
     }
     
     ESP_LOGI(TAG, "WebSocket client started");
+    is_started = true;
     return ESP_OK;
 }
 
@@ -175,29 +181,63 @@ esp_err_t websocket_client_disconnect(void) {
     
     if (!is_connected) {
         ESP_LOGW(TAG, "Not connected");
-        return ESP_OK;
-    }
-    
-    esp_err_t ret = esp_websocket_client_close(g_ws_client, portMAX_DELAY);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to close WebSocket: %s", esp_err_to_name(ret));
-    }
-    
-    ret = esp_websocket_client_stop(g_ws_client);
-    if (ret != ESP_OK) {
-        if (ret == ESP_ERR_INVALID_STATE || ret == ESP_FAIL) {
-            ESP_LOGW(TAG, "WebSocket client stop reported %s, continuing cleanup",
-                     esp_err_to_name(ret));
-        } else {
-            ESP_LOGE(TAG, "Failed to stop WebSocket client: %s", esp_err_to_name(ret));
-            return ret;
+    } else {
+        esp_err_t close_ret = esp_websocket_client_close(g_ws_client, portMAX_DELAY);
+        if (close_ret != ESP_OK && close_ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to close WebSocket: %s", esp_err_to_name(close_ret));
         }
+    }
+
+    esp_err_t ret = ESP_OK;
+    if (is_started) {
+        ret = esp_websocket_client_stop(g_ws_client);
+        if (ret != ESP_OK) {
+            if (ret == ESP_ERR_INVALID_STATE || ret == ESP_FAIL) {
+                ESP_LOGW(TAG, "WebSocket client stop reported %s, continuing cleanup",
+                         esp_err_to_name(ret));
+            } else {
+                ESP_LOGE(TAG, "Failed to stop WebSocket client: %s", esp_err_to_name(ret));
+                return ret;
+            }
+        }
+        is_started = false;
     }
     
     is_connected = false;
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     ESP_LOGI(TAG, "WebSocket disconnected");
     
+    return ESP_OK;
+}
+
+esp_err_t websocket_client_force_stop(void) {
+    if (!is_initialized || g_ws_client == NULL) {
+        is_connected = false;
+        g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+        is_started = false;
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Force stopping WebSocket client");
+
+    esp_err_t close_ret = esp_websocket_client_close(g_ws_client, 0);
+    if (close_ret != ESP_OK && close_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "Force close returned %s", esp_err_to_name(close_ret));
+    }
+
+    if (is_started) {
+        esp_err_t stop_ret = esp_websocket_client_stop(g_ws_client);
+        if (stop_ret == ESP_ERR_INVALID_STATE) {
+            stop_ret = ESP_OK;
+        } else if (stop_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Force stop returned %s", esp_err_to_name(stop_ret));
+        }
+        is_started = false;
+    }
+
+    is_connected = false;
+    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+
     return ESP_OK;
 }
 
@@ -315,6 +355,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "✅ WebSocket connected to server");
             is_connected = true;
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+            is_started = true;
             
             // Send handshake immediately after connection
             websocket_client_send_handshake();
@@ -328,6 +369,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGW(TAG, "⚠️ WebSocket disconnected");
             is_connected = false;
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+            is_started = false;
             
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_DISCONNECTED, g_status_callback_arg);
@@ -420,19 +462,34 @@ static void update_pipeline_stage(const char *status, const char *stage) {
 
     websocket_pipeline_stage_t new_stage = g_pipeline_stage;
     bool notify_eos = false;
+    bool voice_active = (state_manager_get_state() == SYSTEM_STATE_VOICE_ACTIVE);
 
     if (strcmp(status, "complete") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_COMPLETE;
         notify_eos = true;
+        if (voice_active) {
+            led_controller_set_state(LED_STATE_SOLID);
+        }
     } else if (strcmp(status, "processing") == 0) {
         if (stage != NULL) {
             if (strcmp(stage, "transcription") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
+                if (voice_active) {
+                    led_controller_set_state(LED_STATE_PULSING);
+                }
             } else if (strcmp(stage, "llm") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_LLM;
+                if (voice_active) {
+                    led_controller_set_state(LED_STATE_PULSING);
+                }
             } else if (strcmp(stage, "tts") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TTS;
+                if (voice_active) {
+                    led_controller_set_state(LED_STATE_SOLID);
+                }
             }
+        } else if (voice_active) {
+            led_controller_set_state(LED_STATE_PULSING);
         }
     } else if (strcmp(status, "idle") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
