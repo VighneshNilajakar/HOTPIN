@@ -26,9 +26,10 @@
 
 static const char *TAG = TAG_STT;
 
-#define STT_STREAM_EVENT_START   (1U << 0)
-#define STT_STREAM_EVENT_STOP    (1U << 1)
-#define STT_STREAM_EVENT_SHUTDOWN (1U << 2)
+#define STT_STREAM_EVENT_START        (1U << 0)
+#define STT_STREAM_EVENT_STOP         (1U << 1)
+#define STT_STREAM_EVENT_SHUTDOWN     (1U << 2)
+#define STT_STREAM_EVENT_CAPTURE_IDLE (1U << 3)
 
 static stt_pipeline_handle_t s_pipeline_ctx = {
     .stream_events = NULL,
@@ -75,9 +76,10 @@ static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read)
 static void stt_pipeline_mark_stopped(void);
 static void stt_pipeline_dispatch_stop_event(void);
 static void stt_pipeline_reset_ring_buffer(void);
-static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks);
+static void stt_pipeline_wait_for_capture_idle(TickType_t deadline_ticks);
 static void stt_pipeline_wait_for_streaming_idle(TickType_t deadline_ticks);
 static bool stt_pipeline_stop_signal_received(void);
+static inline void stt_pipeline_notify_capture_idle(void);
 
 // ===========================
 // Public Functions
@@ -285,7 +287,10 @@ esp_err_t stt_pipeline_start(void) {
     s_stop_event_posted = false;
     stt_pipeline_reset_ring_buffer();
 
-    xEventGroupClearBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+    xEventGroupClearBits(s_pipeline_ctx.stream_events,
+                         STT_STREAM_EVENT_START |
+                         STT_STREAM_EVENT_STOP |
+                         STT_STREAM_EVENT_CAPTURE_IDLE);
     xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_START);
 
     system_event_t evt = {
@@ -315,11 +320,18 @@ esp_err_t stt_pipeline_stop(void) {
         return ESP_OK;
     }
 
+    if (s_pipeline_ctx.stream_events != NULL) {
+        xEventGroupClearBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_CAPTURE_IDLE);
+    }
+
     stt_pipeline_mark_stopped();
-    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
 
     TickType_t deadline_ticks = xTaskGetTickCount() + pdMS_TO_TICKS(STT_TASK_STOP_WAIT_MS);
-    stt_pipeline_wait_for_tasks_shutdown(deadline_ticks);
+    stt_pipeline_wait_for_capture_idle(deadline_ticks);
+
+    if (s_pipeline_ctx.stream_events != NULL) {
+        xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+    }
     stt_pipeline_wait_for_streaming_idle(deadline_ticks);
 
     stt_pipeline_reset_ring_buffer();
@@ -372,6 +384,10 @@ static void audio_capture_task(void *pvParameters) {
     ESP_LOGI(TAG, "[STABILIZATION] Phase 2: Verify audio driver state...");
     if (!audio_driver_is_initialized()) {
         ESP_LOGE(TAG, "❌ CRITICAL: Audio driver not initialized!");
+        if (g_audio_capture_task_handle == xTaskGetCurrentTaskHandle()) {
+            g_audio_capture_task_handle = NULL;
+        }
+        stt_pipeline_notify_capture_idle();
         vTaskDelete(NULL);
         return;
     }
@@ -391,6 +407,7 @@ static void audio_capture_task(void *pvParameters) {
         ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
         ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
         g_audio_capture_task_handle = NULL;
+        stt_pipeline_notify_capture_idle();
         vTaskDelete(NULL);
         return;
     }
@@ -493,6 +510,7 @@ static void audio_capture_task(void *pvParameters) {
         g_audio_capture_task_handle = NULL;
     }
 
+    stt_pipeline_notify_capture_idle();
     vTaskDelete(NULL);
 }
 
@@ -571,7 +589,7 @@ static void audio_streaming_task(void *pvParameters) {
             ESP_LOGI(TAG, "Starting audio streaming to server...");
         }
 
-        while (!aborted_due_to_error && is_running && !stt_pipeline_stop_signal_received()) {
+        while (!aborted_due_to_error && !stt_pipeline_stop_signal_received()) {
             if (!websocket_client_is_connected()) {
                 ESP_LOGE(TAG, "WebSocket disconnected during streaming");
                 stt_pipeline_mark_stopped();
@@ -582,8 +600,15 @@ static void audio_streaming_task(void *pvParameters) {
 
             size_t available = ring_buffer_available_data();
 
-            if (available >= AUDIO_STREAM_CHUNK_SIZE) {
-                esp_err_t ret = ring_buffer_read(stream_buffer, AUDIO_STREAM_CHUNK_SIZE, &bytes_read);
+            if (!is_running && available == 0U) {
+                ESP_LOGI(TAG, "Capture stopped and ring buffer drained; ending streaming loop");
+                break;
+            }
+
+            if (available >= AUDIO_STREAM_CHUNK_SIZE || (!is_running && available > 0U)) {
+                size_t chunk_size = (available >= AUDIO_STREAM_CHUNK_SIZE) ?
+                                    AUDIO_STREAM_CHUNK_SIZE : available;
+                esp_err_t ret = ring_buffer_read(stream_buffer, chunk_size, &bytes_read);
 
                 if (ret == ESP_OK && bytes_read > 0) {
                     if (!websocket_client_can_stream_audio()) {
@@ -705,6 +730,12 @@ static void stt_pipeline_reset_ring_buffer(void) {
     }
 }
 
+static inline void stt_pipeline_notify_capture_idle(void) {
+    if (s_pipeline_ctx.stream_events != NULL) {
+        xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_CAPTURE_IDLE);
+    }
+}
+
 static bool stt_pipeline_stop_signal_received(void) {
     if (s_pipeline_ctx.stream_events == NULL) {
         return false;
@@ -714,7 +745,24 @@ static bool stt_pipeline_stop_signal_received(void) {
     return (bits & STT_STREAM_EVENT_STOP) != 0U;
 }
 
-static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks) {
+static void stt_pipeline_wait_for_capture_idle(TickType_t deadline_ticks) {
+    TickType_t now = xTaskGetTickCount();
+    TickType_t wait_ticks = (deadline_ticks > now) ? (deadline_ticks - now) : 0;
+
+    if (s_pipeline_ctx.stream_events != NULL) {
+        EventBits_t bits = xEventGroupWaitBits(
+            s_pipeline_ctx.stream_events,
+            STT_STREAM_EVENT_CAPTURE_IDLE,
+            pdTRUE,
+            pdFALSE,
+            wait_ticks
+        );
+
+        if ((bits & STT_STREAM_EVENT_CAPTURE_IDLE) != 0U) {
+            return;
+        }
+    }
+
     while (g_audio_capture_task_handle != NULL && xTaskGetTickCount() < deadline_ticks) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -724,6 +772,7 @@ static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks) {
         g_audio_capture_task_handle = NULL;
         ESP_LOGW(TAG, "Force deleting audio capture task after timeout");
         vTaskDelete(handle);
+        stt_pipeline_notify_capture_idle();
     }
 }
 

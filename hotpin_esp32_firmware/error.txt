@@ -1,5 +1,5 @@
 PS F:\Documents\College\6th Semester\Project\ESP_Warp> python main.py
-INFO:     Started server process [18312]
+INFO:     Started server process [2852]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -33,27 +33,41 @@ LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo ./model/graph/phones/wo
 ✓ Server ready at ws://0.0.0.0:8000/ws
 ============================================================
 
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)        
-INFO:     172.24.158.214:56456 - "WebSocket /ws" [accepted]
+INFO:     Application startup complete.        
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.24.158.214:58935 - "WebSocket /ws" [accepted]
 🔌 New WebSocket connection established
 INFO:     connection open
 ✓ Session initialized: esp32-cam-hotpin
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 81920 bytes of audio...
-✓ Transcription [esp32-cam-hotpin]: "hello"
-📝 [esp32-cam-hotpin] Transcript: "hello"
-🤖 [esp32-cam-hotpin] LLM response: "Hello! How can I help you today?"
-✓ TTS synthesis completed: 111568 bytes generated
-✓ Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_n26hp5fg.wav
-🔊 [esp32-cam-hotpin] Streaming 111568 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
+INFO:     connection closed
+
+INFO:     Application startup complete.        
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.24.158.214:58935 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established        
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin        
+INFO:     connection closed
+INFO:     172.24.158.214:58935 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established        
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin        
+INFO:     connection closed
+🔌 New WebSocket connection established        
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin        
+INFO:     connection closed
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin        
+INFO:     connection closed
+✓ Session initialized: esp32-cam-hotpin        
+INFO:     connection closed
 INFO:     connection closed
 🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006)
-✓ Cleared context for session: esp32-cam-hotpin
-🧹 [esp32-cam-hotpin] Session cleaned up
-INFO:     172.24.158.214:56457 - "WebSocket /ws" [accepted]
-🔌 New WebSocket connection established
+🧹 [esp32-cam-hotpin] Session cleaned up       
+INFO:     172.24.158.214:58936 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established        
 INFO:     connection open
-✓ Session initialized: esp32-cam-hotpin
+✓ Session initialized: esp32-cam-hotpin        
+🎤 [esp32-cam-hotpin] End-of-speech signal received
+⚠ [esp32-cam-hotpin] Empty audio buffer, skipping processing

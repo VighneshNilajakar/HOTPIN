@@ -557,6 +557,7 @@ static esp_err_t transition_to_camera_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO CAMERA MODE ===");
     
     esp_err_t ret = ESP_OK;
+    bool audio_was_initialized = audio_driver_is_initialized();
     
     // Step 1: Stop voice mode components if active
     if (previous_state == SYSTEM_STATE_VOICE_ACTIVE) {
@@ -571,6 +572,8 @@ static esp_err_t transition_to_camera_mode(void) {
 
         // Small delay for tasks to finish
         vTaskDelay(pdMS_TO_TICKS(100));
+
+        audio_was_initialized = audio_driver_is_initialized();
     }
     
     // Step 2: Acquire I2S mutex (CRITICAL SECTION)
@@ -581,7 +584,7 @@ static esp_err_t transition_to_camera_mode(void) {
     }
     
     // Step 3: Deinitialize audio drivers if active
-    if (audio_driver_is_initialized()) {
+    if (audio_was_initialized) {
         ESP_LOGI(TAG, "Deinitializing audio drivers...");
         ret = audio_driver_deinit();
         if (ret != ESP_OK) {
@@ -589,6 +592,8 @@ static esp_err_t transition_to_camera_mode(void) {
             xSemaphoreGive(g_i2s_config_mutex);
             return ret;
         }
+    } else {
+        ESP_LOGI(TAG, "Audio drivers already inactive; skipping deinit");
     }
     
     // Step 4: Initialize camera
