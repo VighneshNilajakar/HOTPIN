@@ -82,9 +82,10 @@ esp_err_t websocket_client_disconnect(void) {
     return ESP_OK;
 }
 
-esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length) {
-    ESP_LOGD(TAG, "WebSocket client STUB: would send %d bytes audio data", length);
+esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32_t timeout_ms) {
+    ESP_LOGD(TAG, "WebSocket client STUB: would send %d bytes audio data", length);    
     (void)data; // Suppress unused parameter warning
+    (void)timeout_ms;
     return ESP_OK;
 }
 
@@ -119,6 +120,13 @@ esp_err_t websocket_client_send_eos(void) {
 bool websocket_client_is_connected(void) {
     return is_connected;
 }
+
+bool websocket_client_session_ready(void) {
+    return is_connected;
+}
+
+bool websocket_client_can_stream_audio(void) {
+    return is_connected;
 
 void websocket_client_set_audio_callback(websocket_audio_callback_t callback, void *arg) {
     g_audio_callback = callback;

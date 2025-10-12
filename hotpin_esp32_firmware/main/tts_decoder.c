@@ -61,6 +61,11 @@ static wav_runtime_info_t wav_info;
 static volatile size_t bytes_received = 0;
 static volatile size_t pcm_bytes_played = 0;
 
+// Stereo duplication scratch space (allocated on demand)
+static uint8_t *s_stereo_scratch = NULL;
+static size_t s_stereo_scratch_size = 0;
+static size_t s_stereo_scratch_capacity_samples = 0;
+
 // Playback queue and task
 static QueueHandle_t g_audio_queue = NULL;
 static TaskHandle_t g_playback_task_handle = NULL;
@@ -80,6 +85,7 @@ static esp_err_t parse_wav_header(const uint8_t *buffer, size_t length, size_t *
 static void print_wav_info(const wav_runtime_info_t *info);
 static void audio_data_callback(const uint8_t *data, size_t len, void *arg);
 static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, size_t *accounted_bytes);
+static bool ensure_stereo_scratch_buffer(void);
 
 // ===========================
 // Public Functions
@@ -133,6 +139,14 @@ esp_err_t tts_decoder_deinit(void) {
         }
         vQueueDelete(g_audio_queue);
         g_audio_queue = NULL;
+    }
+
+    if (s_stereo_scratch != NULL) {
+        ESP_LOGD(TAG, "Freeing stereo scratch buffer (%zu bytes)", s_stereo_scratch_size);
+        heap_caps_free(s_stereo_scratch);
+        s_stereo_scratch = NULL;
+        s_stereo_scratch_size = 0;
+        s_stereo_scratch_capacity_samples = 0;
     }
     
     is_initialized = false;
@@ -513,40 +527,45 @@ static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, s
     }
 
     if (duplicate_to_stereo) {
-        size_t sample_count = length / sizeof(int16_t);
-        size_t stereo_bytes = sample_count * sizeof(int16_t) * 2;
-
-        if (s_duplication_logs < 6) {
-            ESP_LOGD(TAG, "[PCM DUP] %zu mono samples -> %zu stereo bytes", sample_count, stereo_bytes);
-            s_duplication_logs++;
-        }
-
-        uint8_t *stereo_buf = heap_caps_aligned_alloc(4, stereo_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        if (stereo_buf == NULL) {
-            ESP_LOGW(TAG, "Stereo duplication aligned alloc failed (%zu bytes) - attempting fallback", stereo_bytes);
-            stereo_buf = heap_caps_malloc(stereo_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        }
-
-        if (stereo_buf == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate stereo duplication buffer (%zu bytes)", stereo_bytes);
+        if (!ensure_stereo_scratch_buffer()) {
+            ESP_LOGE(TAG, "Failed to provision stereo scratch buffer (%u bytes)", (unsigned int)CONFIG_TTS_STEREO_SCRATCH_BYTES);
             return ESP_ERR_NO_MEM;
         }
 
-        int16_t *dst = (int16_t *)stereo_buf;
+        const size_t sample_count = length / sizeof(int16_t);
         const int16_t *src = (const int16_t *)data;
-        for (size_t i = 0; i < sample_count; ++i) {
-            int16_t sample = src[i];
-            dst[2 * i] = sample;
-            dst[2 * i + 1] = sample;
+        size_t processed_samples = 0;
+
+        if (s_duplication_logs < 6) {
+            ESP_LOGD(TAG, "[PCM DUP] %zu mono samples -> chunked stereo writes (scratch=%zu bytes)",
+                     sample_count, s_stereo_scratch_size);
+            s_duplication_logs++;
         }
 
-        size_t written = 0;
-        esp_err_t ret = audio_driver_write(stereo_buf, stereo_bytes, &written, portMAX_DELAY);
-        heap_caps_free(stereo_buf);
+        while (processed_samples < sample_count) {
+            size_t remaining = sample_count - processed_samples;
+            size_t block_samples = (remaining < s_stereo_scratch_capacity_samples) ? remaining : s_stereo_scratch_capacity_samples;
+            int16_t *dst = (int16_t *)s_stereo_scratch;
 
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Stereo duplication write failed: %s", esp_err_to_name(ret));
-            return ret;
+            for (size_t i = 0; i < block_samples; ++i) {
+                int16_t sample = src[processed_samples + i];
+                size_t idx = i * 2;
+                dst[idx] = sample;
+                dst[idx + 1] = sample;
+            }
+
+            size_t block_bytes = block_samples * sizeof(int16_t) * 2U;
+            size_t written = 0;
+            esp_err_t ret = audio_driver_write((const uint8_t *)dst, block_bytes, &written, portMAX_DELAY);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Stereo duplication write failed mid-stream: %s", esp_err_to_name(ret));
+                return ret;
+            }
+            if (written != block_bytes) {
+                ESP_LOGW(TAG, "Stereo write partial: %zu/%zu bytes", written, block_bytes);
+            }
+
+            processed_samples += block_samples;
         }
 
         if (accounted_bytes) {
@@ -772,4 +791,37 @@ static void print_wav_info(const wav_runtime_info_t *info) {
     ESP_LOGI(TAG, "Block Align: %u", (unsigned int)info->block_align);
     ESP_LOGI(TAG, "Byte Rate: %lu", (unsigned long)info->byte_rate);
     ESP_LOGI(TAG, "====================");
+}
+
+static bool ensure_stereo_scratch_buffer(void) {
+    if (s_stereo_scratch != NULL) {
+        return true;
+    }
+
+    uint8_t *buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (buf == NULL) {
+        ESP_LOGW(TAG, "Stereo scratch aligned alloc failed (%u) - attempting PSRAM", (unsigned int)CONFIG_TTS_STEREO_SCRATCH_BYTES);
+        buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+    }
+
+    if (buf == NULL) {
+        ESP_LOGE(TAG, "Unable to allocate stereo duplication scratch buffer (%u bytes)", (unsigned int)CONFIG_TTS_STEREO_SCRATCH_BYTES);
+        return false;
+    }
+
+    s_stereo_scratch = buf;
+    s_stereo_scratch_size = CONFIG_TTS_STEREO_SCRATCH_BYTES;
+    s_stereo_scratch_capacity_samples = s_stereo_scratch_size / (sizeof(int16_t) * 2U);
+
+    if (s_stereo_scratch_capacity_samples == 0) {
+        ESP_LOGE(TAG, "Stereo scratch buffer too small (%zu bytes) for duplication", s_stereo_scratch_size);
+        heap_caps_free(s_stereo_scratch);
+        s_stereo_scratch = NULL;
+        s_stereo_scratch_size = 0;
+        return false;
+    }
+
+    ESP_LOGI(TAG, "[PCM DUP] Scratch buffer ready: %zu bytes (%zu samples per block)",
+             s_stereo_scratch_size, s_stereo_scratch_capacity_samples);
+    return true;
 }

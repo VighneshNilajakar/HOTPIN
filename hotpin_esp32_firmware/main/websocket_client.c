@@ -15,9 +15,11 @@
 #include "config.h"
 #include "event_dispatcher.h"
 #include "system_events.h"
+#include "stt_pipeline.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
+#include "freertos/FreeRTOS.h"
 #include "cJSON.h"
 #include <string.h>
 
@@ -30,6 +32,7 @@ static bool is_initialized = false;
 static bool is_started = false;
 static char server_uri[128] = {0};
 static volatile websocket_pipeline_stage_t g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+static volatile bool g_session_ready = false;
 
 // Callback function pointer for incoming WAV audio data
 static websocket_audio_callback_t g_audio_callback = NULL;
@@ -206,6 +209,7 @@ esp_err_t websocket_client_disconnect(void) {
     
     is_connected = false;
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+    g_session_ready = false;
     ESP_LOGI(TAG, "WebSocket disconnected");
     
     return ESP_OK;
@@ -213,9 +217,10 @@ esp_err_t websocket_client_disconnect(void) {
 
 esp_err_t websocket_client_force_stop(void) {
     if (!is_initialized || g_ws_client == NULL) {
-        is_connected = false;
-        g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
-        is_started = false;
+    is_connected = false;
+    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+    g_session_ready = false;
+    is_started = false;
         return ESP_OK;
     }
 
@@ -238,6 +243,7 @@ esp_err_t websocket_client_force_stop(void) {
 
     is_connected = false;
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+    g_session_ready = false;
 
     return ESP_OK;
 }
@@ -279,7 +285,7 @@ esp_err_t websocket_client_send_handshake(void) {
     return ESP_OK;
 }
 
-esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length) {
+esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32_t timeout_ms) {
     if (!is_connected) {
         ESP_LOGE(TAG, "Cannot send audio - not connected");
         return ESP_ERR_INVALID_STATE;
@@ -290,7 +296,19 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, portMAX_DELAY);
+    TickType_t ticks_to_wait;
+    if (timeout_ms == (uint32_t)portMAX_DELAY) {
+        ticks_to_wait = portMAX_DELAY;
+    } else if (timeout_ms == 0U) {
+        ticks_to_wait = pdMS_TO_TICKS(100);
+    } else {
+        ticks_to_wait = pdMS_TO_TICKS(timeout_ms);
+        if (ticks_to_wait == 0) {
+            ticks_to_wait = 1;
+        }
+    }
+
+    int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, ticks_to_wait);
     if (ret < 0) {
         ESP_LOGE(TAG, "Failed to send audio chunk (%zu bytes)", length);
         return ESP_FAIL;
@@ -331,6 +349,20 @@ bool websocket_client_is_connected(void) {
     return is_connected;
 }
 
+bool websocket_client_session_ready(void) {
+    return is_connected && g_session_ready;
+}
+
+bool websocket_client_can_stream_audio(void) {
+    websocket_pipeline_stage_t stage = g_pipeline_stage;
+    if (!is_connected || !g_session_ready) {
+        return false;
+    }
+
+    return stage == WEBSOCKET_PIPELINE_STAGE_IDLE ||
+           stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
+}
+
 void websocket_client_set_audio_callback(websocket_audio_callback_t callback, void *arg) {
     g_audio_callback = callback;
     g_audio_callback_arg = arg;
@@ -356,6 +388,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "✅ WebSocket connected to server");
             is_connected = true;
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+            g_session_ready = false;
             is_started = true;
             
             // Send handshake immediately after connection
@@ -370,6 +403,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGW(TAG, "⚠️ WebSocket disconnected");
             is_connected = false;
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+            g_session_ready = false;
             is_started = false;
             
             if (g_status_callback) {
@@ -390,6 +424,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
         case WEBSOCKET_EVENT_ERROR:
             ESP_LOGE(TAG, "❌ WebSocket error occurred");
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+            g_session_ready = false;
             
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_ERROR, g_status_callback_arg);
@@ -456,27 +491,55 @@ static void handle_binary_message(const uint8_t *data, size_t len) {
     }
 }
 
+static void update_session_ready_from_stage(websocket_pipeline_stage_t stage)
+{
+    switch (stage) {
+        case WEBSOCKET_PIPELINE_STAGE_IDLE:
+        case WEBSOCKET_PIPELINE_STAGE_COMPLETE:
+            g_session_ready = true;
+            break;
+        case WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION:
+            // Allow additional audio while server confirms transcription stage
+            g_session_ready = true;
+            break;
+        default:
+            g_session_ready = false;
+            break;
+    }
+}
+
 static void update_pipeline_stage(const char *status, const char *stage) {
     if (status == NULL) {
         return;
     }
 
     websocket_pipeline_stage_t new_stage = g_pipeline_stage;
+    bool explicit_ready = g_session_ready;
 
     if (strcmp(status, "complete") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_COMPLETE;
+        explicit_ready = true;
     } else if (strcmp(status, "processing") == 0) {
         if (stage != NULL) {
             if (strcmp(stage, "transcription") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
+                explicit_ready = true;
             } else if (strcmp(stage, "llm") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_LLM;
+                explicit_ready = false;
             } else if (strcmp(stage, "tts") == 0) {
                 new_stage = WEBSOCKET_PIPELINE_STAGE_TTS;
+                explicit_ready = false;
             }
         }
+    } else if (strcmp(status, "connected") == 0) {
+        new_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+        explicit_ready = true;
     } else if (strcmp(status, "idle") == 0) {
         new_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+        explicit_ready = true;
+    } else if (strcmp(status, "error") == 0) {
+        explicit_ready = false;
     }
 
     if (new_stage != g_pipeline_stage) {
@@ -485,7 +548,20 @@ static void update_pipeline_stage(const char *status, const char *stage) {
                  pipeline_stage_to_string(new_stage));
         g_pipeline_stage = new_stage;
         post_pipeline_stage_event(new_stage);
+
+        if (new_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION ||
+            new_stage == WEBSOCKET_PIPELINE_STAGE_LLM ||
+            new_stage == WEBSOCKET_PIPELINE_STAGE_TTS ||
+            new_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+            stt_pipeline_cancel_capture();
+        }
     }
+
+    if (explicit_ready != g_session_ready) {
+        g_session_ready = explicit_ready;
+    }
+
+    update_session_ready_from_stage(g_pipeline_stage);
 }
 
 static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage) {

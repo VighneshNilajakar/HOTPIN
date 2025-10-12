@@ -36,6 +36,9 @@ static system_state_t current_state = SYSTEM_STATE_INIT;
 static system_state_t previous_state = SYSTEM_STATE_INIT;
 static uint32_t s_mode_switch_count = 0;
 static websocket_pipeline_stage_t s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+static bool s_transition_in_progress = false;
+static bool s_capture_in_progress = false;
+static bool s_tts_playback_active = false;
 
 // External synchronization primitive
 extern SemaphoreHandle_t g_i2s_config_mutex;
@@ -71,6 +74,10 @@ static void handle_stt_started(void);
 static void handle_stt_stopped(void);
 static void handle_tts_playback_started(void);
 static void handle_tts_playback_finished(esp_err_t result);
+static bool guardrails_is_pipeline_busy(void);
+static bool guardrails_should_block_button(button_event_type_t type);
+static bool guardrails_should_block_capture(void);
+static void guardrails_signal_block(const char *reason);
 
 // ===========================
 // Public Functions
@@ -83,14 +90,21 @@ void state_manager_task(void *pvParameters) {
     // Initialize camera mode first
     ESP_LOGI(TAG, "Starting in camera mode...");
     current_state = SYSTEM_STATE_TRANSITIONING;
-    
-    if (transition_to_camera_mode() == ESP_OK) {
+    s_transition_in_progress = true;
+    esp_err_t init_ret = transition_to_camera_mode();
+    s_transition_in_progress = false;
+
+    if (init_ret == ESP_OK) {
         current_state = SYSTEM_STATE_CAMERA_STANDBY;
         ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
         led_controller_set_state(LED_STATE_BREATHING);
     } else {
         ESP_LOGE(TAG, "❌ Failed to initialize camera - entering error state");
         current_state = SYSTEM_STATE_ERROR;
+        esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+        if (beep_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+        }
     }
     
     QueueHandle_t event_queue = event_dispatcher_queue();
@@ -197,6 +211,69 @@ system_state_t state_manager_get_state(void) {
     return current_state;
 }
 
+static bool guardrails_is_pipeline_busy(void) {
+    return websocket_client_is_pipeline_active() ||
+           (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS) ||
+           (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_LLM) ||
+           (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION) ||
+           s_tts_playback_active;
+}
+
+static void guardrails_signal_block(const char *reason) {
+    ESP_LOGW(TAG, "Guardrail blocked request: %s", reason ? reason : "unknown reason");
+    esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+    if (beep_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+    }
+}
+
+static bool guardrails_should_block_button(button_event_type_t type) {
+    if (s_transition_in_progress) {
+        guardrails_signal_block("state transition in progress");
+        return true;
+    }
+
+    if (s_capture_in_progress) {
+        guardrails_signal_block("camera capture in progress");
+        return true;
+    }
+
+    if ((type == BUTTON_EVENT_SINGLE_CLICK || type == BUTTON_EVENT_DOUBLE_CLICK) && guardrails_is_pipeline_busy()) {
+        if (type == BUTTON_EVENT_SINGLE_CLICK && current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+            ESP_LOGW(TAG, "Guardrail soft override: stopping voice pipeline while busy");
+        } else {
+            guardrails_signal_block("audio pipeline busy");
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool guardrails_should_block_capture(void) {
+    if (s_capture_in_progress) {
+        guardrails_signal_block("camera capture already active");
+        return true;
+    }
+
+    if (s_transition_in_progress) {
+        guardrails_signal_block("state transition in progress");
+        return true;
+    }
+
+    if (guardrails_is_pipeline_busy()) {
+        guardrails_signal_block("audio pipeline busy");
+        return true;
+    }
+
+    if (current_state == SYSTEM_STATE_TRANSITIONING) {
+        guardrails_signal_block("FSM transitioning");
+        return true;
+    }
+
+    return false;
+}
+
 static void process_button_event(const button_event_payload_t *button_event)
 {
     if (button_event == NULL) {
@@ -211,6 +288,13 @@ static void process_button_event(const button_event_payload_t *button_event)
         return;
     }
 
+    if (button_event->type != BUTTON_EVENT_LONG_PRESS &&
+        button_event->type != BUTTON_EVENT_LONG_PRESS_RELEASE) {
+        if (guardrails_should_block_button(button_event->type)) {
+            return;
+        }
+    }
+
     switch (button_event->type) {
         case BUTTON_EVENT_SINGLE_CLICK:
             ESP_LOGI(TAG, "Single click - mode toggle requested");
@@ -221,13 +305,21 @@ static void process_button_event(const button_event_payload_t *button_event)
                          (unsigned int)s_mode_switch_count);
                 previous_state = current_state;
                 current_state = SYSTEM_STATE_TRANSITIONING;
+                s_transition_in_progress = true;
 
-                if (transition_to_voice_mode() == ESP_OK) {
+                esp_err_t voice_ret = transition_to_voice_mode();
+                s_transition_in_progress = false;
+
+                if (voice_ret == ESP_OK) {
                     current_state = SYSTEM_STATE_VOICE_ACTIVE;
                     ESP_LOGI(TAG, "✅ Entered VOICE_ACTIVE state");
                 } else {
                     ESP_LOGE(TAG, "❌ Voice mode transition failed");
                     current_state = SYSTEM_STATE_ERROR;
+                    esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+                    if (beep_ret != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+                    }
                 }
 
             } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
@@ -235,13 +327,21 @@ static void process_button_event(const button_event_payload_t *button_event)
                          (unsigned int)s_mode_switch_count);
                 previous_state = current_state;
                 current_state = SYSTEM_STATE_TRANSITIONING;
+                s_transition_in_progress = true;
 
-                if (transition_to_camera_mode() == ESP_OK) {
+                esp_err_t cam_ret = transition_to_camera_mode();
+                s_transition_in_progress = false;
+
+                if (cam_ret == ESP_OK) {
                     current_state = SYSTEM_STATE_CAMERA_STANDBY;
                     ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
                 } else {
                     ESP_LOGE(TAG, "❌ Camera mode transition failed");
                     current_state = SYSTEM_STATE_ERROR;
+                    esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+                    if (beep_ret != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+                    }
                 }
             } else {
                 ESP_LOGW(TAG, "Single click received in state %s - no action",
@@ -273,6 +373,11 @@ static void process_button_event(const button_event_payload_t *button_event)
 
 static void execute_capture_sequence(void)
 {
+    if (guardrails_should_block_capture()) {
+        ESP_LOGW(TAG, "Capture request ignored by guardrail");
+        return;
+    }
+
     esp_err_t ret = handle_camera_capture();
     if (ret == ESP_OK) {
         return;
@@ -358,6 +463,7 @@ static void handle_stt_stopped(void)
 static void handle_tts_playback_started(void)
 {
     ESP_LOGI(TAG, "TTS playback start event received");
+    s_tts_playback_active = true;
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
         led_controller_set_state(LED_STATE_SOLID);
     }
@@ -370,6 +476,8 @@ static void handle_tts_playback_finished(esp_err_t result)
     } else {
         ESP_LOGE(TAG, "TTS playback finished with error: %s", esp_err_to_name(result));
     }
+
+    s_tts_playback_active = false;
 
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
         led_controller_set_state(LED_STATE_SOLID);
@@ -458,6 +566,8 @@ static esp_err_t transition_to_camera_mode(void) {
         stt_pipeline_stop();
         wait_for_voice_pipeline_shutdown();
         tts_decoder_stop();
+        s_tts_playback_active = false;
+        s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 
         // Small delay for tasks to finish
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -552,6 +662,13 @@ static esp_err_t capture_and_upload_image(void) {
 static esp_err_t handle_camera_capture(void) {
     ESP_LOGI(TAG, "Starting camera capture sequence");
 
+    if (s_capture_in_progress) {
+        ESP_LOGW(TAG, "Camera capture already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_capture_in_progress = true;
+
     led_controller_set_state(LED_STATE_FLASH);
     esp_err_t capture_sound_ret = feedback_player_play(FEEDBACK_SOUND_CAPTURE);
     if (capture_sound_ret != ESP_OK) {
@@ -563,6 +680,7 @@ static esp_err_t handle_camera_capture(void) {
     bool voice_pipeline_paused = false;
     bool audio_was_initialized = false;
     bool camera_initialized_here = false;
+    bool mutex_acquired = false;
 
     // Fast path when camera is already armed
     if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
@@ -571,7 +689,8 @@ static esp_err_t handle_camera_capture(void) {
             esp_err_t init_ret = camera_controller_init();
             if (init_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(init_ret));
-                return init_ret;
+                ret = init_ret;
+                goto finalize_capture;
             }
         }
         ret = capture_and_upload_image();
@@ -601,9 +720,11 @@ static esp_err_t handle_camera_capture(void) {
             stt_pipeline_start();
             tts_decoder_start();
         }
-        return ESP_ERR_TIMEOUT;
+        ret = ESP_ERR_TIMEOUT;
+        goto finalize_capture;
     }
 
+    mutex_acquired = true;
     audio_was_initialized = audio_driver_is_initialized();
 
     if (audio_was_initialized) {
@@ -649,21 +770,33 @@ restore_voice_path:
                 tts_decoder_start();
             }
         } else {
-            // Audio driver was already offline; just restart pipelines
             stt_pipeline_start();
             tts_decoder_start();
         }
     }
 
-    xSemaphoreGive(g_i2s_config_mutex);
-    goto finalize_capture;
+    if (mutex_acquired) {
+        xSemaphoreGive(g_i2s_config_mutex);
+        mutex_acquired = false;
+    }
 
 finalize_capture:
     if (capture_success) {
         led_state_t next_led = (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
                                LED_STATE_SOLID : LED_STATE_BREATHING;
         led_controller_set_state(next_led);
+    } else {
+        esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+        if (beep_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+        }
     }
+
+    if (mutex_acquired) {
+        xSemaphoreGive(g_i2s_config_mutex);
+    }
+
+    s_capture_in_progress = false;
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Camera capture sequence complete");
@@ -868,7 +1001,10 @@ static void handle_error_state(void) {
     
     // Try to return to camera mode as safe fallback
     current_state = SYSTEM_STATE_TRANSITIONING;
-    if (transition_to_camera_mode() == ESP_OK) {
+    s_transition_in_progress = true;
+    esp_err_t recovery_ret = transition_to_camera_mode();
+    s_transition_in_progress = false;
+    if (recovery_ret == ESP_OK) {
         current_state = SYSTEM_STATE_CAMERA_STANDBY;
         error_count = 0;  // Reset error count on success
         last_signaled_error = 0;

@@ -102,7 +102,7 @@ esp_err_t websocket_client_force_stop(void);
  * @param length Buffer length in bytes
  * @return ESP_OK on success, error code otherwise
  */
-esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length);
+esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32_t timeout_ms);
 
 /**
  * @brief Send text message (JSON)
@@ -132,6 +132,8 @@ esp_err_t websocket_client_send_eos(void);
  * @return true if connected, false otherwise
  */
 bool websocket_client_is_connected(void);
+bool websocket_client_session_ready(void);
+bool websocket_client_can_stream_audio(void);
 
 /**
  * @brief Register callback for incoming audio data (TTS)

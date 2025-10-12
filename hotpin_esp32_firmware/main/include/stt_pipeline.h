@@ -53,4 +53,9 @@ esp_err_t stt_pipeline_stop(void);
  */
 bool stt_pipeline_is_recording(void);
 
+/**
+ * @brief Cancel any pending capture and preserve current ring buffer state
+ */
+void stt_pipeline_cancel_capture(void);
+
 #endif // STT_PIPELINE_H

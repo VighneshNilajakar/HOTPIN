@@ -101,9 +101,14 @@
 // Audio buffer sizes (PSRAM-backed)
 #define CONFIG_STT_RING_BUFFER_SIZE         (64 * 1024)     // 64KB for 2 seconds @ 16kHz
 #define CONFIG_TTS_BUFFER_SIZE              (512 * 1024)    // 512KB for TTS WAV data
+#define CONFIG_TTS_STEREO_SCRATCH_BYTES     (8 * 1024)      // Scratch buffer for mono→stereo duplication
 
 #if CONFIG_I2S_DMA_BUF_LEN > 1023
 #error "CONFIG_I2S_DMA_BUF_LEN exceeds ESP32 I2S HW limit (1023 samples per DMA frame)"
+#endif
+
+#if (CONFIG_TTS_STEREO_SCRATCH_BYTES % 4) != 0
+#error "CONFIG_TTS_STEREO_SCRATCH_BYTES must be 4-byte aligned"
 #endif
 
 /*******************************************************************************

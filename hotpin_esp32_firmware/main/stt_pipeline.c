@@ -41,21 +41,31 @@ static TaskHandle_t g_audio_streaming_task_handle = NULL;
 static bool is_initialized = false;
 static bool is_recording = false;
 static bool is_running = false;
+static bool s_stop_event_posted = false;
 
 // Audio capture configuration
 #define AUDIO_CAPTURE_CHUNK_SIZE     1024  // Bytes per read (32ms @ 16kHz, 16-bit)
 #define AUDIO_STREAM_CHUNK_SIZE      4096  // Bytes per WebSocket send
 #define AUDIO_CAPTURE_TIMEOUT_MS     100
+#define AUDIO_STREAM_SEND_TIMEOUT_MS 250   // Timeout for WebSocket writes
+#define AUDIO_STREAM_HEALTH_LOG_MS   5000  // Periodic health log interval
+#define AUDIO_STREAM_MAX_SEND_FAILURES 3    // Abort threshold for consecutive send failures
+#define STT_TASK_STOP_WAIT_MS        500    // Wait time for tasks to self-terminate
 
 // ===========================
 // Private Function Declarations
 // ===========================
+
 static void audio_capture_task(void *pvParameters);
 static void audio_streaming_task(void *pvParameters);
 static size_t ring_buffer_available_space(void);
 static size_t ring_buffer_available_data(void);
 static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) __attribute__((noinline));
 static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read) __attribute__((noinline));
+static void stt_pipeline_mark_stopped(void);
+static void stt_pipeline_dispatch_stop_event(void);
+static void stt_pipeline_reset_ring_buffer(void);
+static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks);
 
 // ===========================
 // Public Functions
@@ -220,6 +230,8 @@ esp_err_t stt_pipeline_start(void) {
     
     is_running = true;
     is_recording = true;
+    s_stop_event_posted = false;
+    stt_pipeline_reset_ring_buffer();
 
     system_event_t evt = {
         .type = SYSTEM_EVENT_STT_STARTED,
@@ -235,42 +247,31 @@ esp_err_t stt_pipeline_start(void) {
 
 esp_err_t stt_pipeline_stop(void) {
     ESP_LOGI(TAG, "Stopping STT pipeline...");
-    
-    if (!is_running) {
-        ESP_LOGW(TAG, "STT pipeline not running");
+
+    if (!is_initialized && g_audio_capture_task_handle == NULL && g_audio_streaming_task_handle == NULL) {
+        ESP_LOGW(TAG, "STT pipeline not initialized");
+        stt_pipeline_dispatch_stop_event();
         return ESP_OK;
     }
-    
-    is_recording = false;
-    is_running = false;
-    
-    // Send EOS signal to server
+
+    if (!is_running && g_audio_capture_task_handle == NULL && g_audio_streaming_task_handle == NULL) {
+        ESP_LOGW(TAG, "STT pipeline already stopped");
+        stt_pipeline_dispatch_stop_event();
+        return ESP_OK;
+    }
+
+    stt_pipeline_mark_stopped();
+
     if (websocket_client_is_connected()) {
         ESP_LOGI(TAG, "Sending EOS signal...");
         websocket_client_send_eos();
     }
-    
-    // Wait for tasks to finish
-    vTaskDelay(pdMS_TO_TICKS(200));
-    
-    // Delete tasks
-    if (g_audio_capture_task_handle != NULL) {
-        vTaskDelete(g_audio_capture_task_handle);
-        g_audio_capture_task_handle = NULL;
-    }
-    
-    if (g_audio_streaming_task_handle != NULL) {
-        vTaskDelete(g_audio_streaming_task_handle);
-        g_audio_streaming_task_handle = NULL;
-    }
-    
-    system_event_t evt = {
-        .type = SYSTEM_EVENT_STT_STOPPED,
-        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
-    };
-    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
-        ESP_LOGW(TAG, "Failed to enqueue STT stop event");
-    }
+
+    TickType_t deadline_ticks = xTaskGetTickCount() + pdMS_TO_TICKS(STT_TASK_STOP_WAIT_MS);
+    stt_pipeline_wait_for_tasks_shutdown(deadline_ticks);
+
+    stt_pipeline_reset_ring_buffer();
+    stt_pipeline_dispatch_stop_event();
 
     ESP_LOGI(TAG, "STT pipeline stopped");
     return ESP_OK;
@@ -278,6 +279,20 @@ esp_err_t stt_pipeline_stop(void) {
 
 bool stt_pipeline_is_recording(void) {
     return is_recording;
+}
+
+void stt_pipeline_cancel_capture(void) {
+    if (!is_running || !is_recording) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Cancelling STT capture while voice pipeline is busy");
+    is_recording = false;
+
+    esp_err_t clr_ret = audio_driver_clear_buffers();
+    if (clr_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to clear audio buffers: %s", esp_err_to_name(clr_ret));
+    }
 }
 
 // ===========================
@@ -340,6 +355,11 @@ static void audio_capture_task(void *pvParameters) {
     ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
     
     while (is_running) {
+        if (!is_recording) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
         int64_t read_start = esp_timer_get_time();
         
         // Read audio from I2S RX (microphone)
@@ -390,6 +410,7 @@ static void audio_capture_task(void *pvParameters) {
                 }
             } else {
                 ESP_LOGW(TAG, "⚠ Ring buffer full - dropping %zu bytes (read #%u)", bytes_read, (unsigned int)read_count);
+                vTaskDelay(pdMS_TO_TICKS(5));
             }
         } else if (ret != ESP_OK) {
             error_count++;
@@ -418,7 +439,7 @@ static void audio_capture_task(void *pvParameters) {
 
 static void audio_streaming_task(void *pvParameters) {
     ESP_LOGI(TAG, "Audio streaming task started on Core %d", xPortGetCoreID());
-    
+
     uint8_t *stream_buffer = heap_caps_malloc(
         AUDIO_STREAM_CHUNK_SIZE,
         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
@@ -431,55 +452,116 @@ static void audio_streaming_task(void *pvParameters) {
     }
 
     ESP_LOGI(TAG, "  ✓ Stream buffer allocated at %p", stream_buffer);
-    
+
     size_t bytes_read = 0;
     uint32_t total_bytes_streamed = 0;
     uint32_t chunk_count = 0;
-    
-    // Wait for WebSocket connection
+    uint32_t dropped_not_ready = 0;
+    uint32_t dropped_send_fail = 0;
+    uint32_t consecutive_send_failures = 0;
+    bool aborted_due_to_error = false;
+    TickType_t last_health_log = xTaskGetTickCount();
+
     while (is_running && !websocket_client_is_connected()) {
         ESP_LOGW(TAG, "Waiting for WebSocket connection...");
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    
+
     if (!websocket_client_is_connected()) {
         ESP_LOGE(TAG, "WebSocket not connected - aborting streaming");
         heap_caps_free(stream_buffer);
         vTaskDelete(NULL);
         return;
     }
-    
+
+    while (is_running && !websocket_client_session_ready()) {
+        ESP_LOGW(TAG, "Waiting for WebSocket session readiness...");
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    if (!websocket_client_session_ready()) {
+        ESP_LOGE(TAG, "WebSocket session not ready - aborting streaming");
+        heap_caps_free(stream_buffer);
+        vTaskDelete(NULL);
+        return;
+    }
+
     ESP_LOGI(TAG, "Starting audio streaming to server...");
-    
+
     while (is_running) {
-        // Check if enough data is available
+        if (!websocket_client_is_connected()) {
+            ESP_LOGE(TAG, "WebSocket disconnected during streaming");
+            stt_pipeline_mark_stopped();
+            aborted_due_to_error = true;
+            break;
+        }
+
         size_t available = ring_buffer_available_data();
-        
+
         if (available >= AUDIO_STREAM_CHUNK_SIZE) {
-            // Read chunk from ring buffer
             esp_err_t ret = ring_buffer_read(stream_buffer, AUDIO_STREAM_CHUNK_SIZE, &bytes_read);
-            
+
             if (ret == ESP_OK && bytes_read > 0) {
-                // Send to WebSocket server
-                ret = websocket_client_send_audio(stream_buffer, bytes_read);
-                
-                if (ret == ESP_OK) {
-                    total_bytes_streamed += bytes_read;
-                    chunk_count++;
-                    ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)", 
-                             (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
+                if (!websocket_client_can_stream_audio()) {
+                    dropped_not_ready++;
+                    if ((dropped_not_ready % 25U) == 0U) {
+                        ESP_LOGW(TAG, "[STREAM] Dropping audio chunk (session busy). dropped_not_ready=%u buffer=%u",
+                                 (unsigned int)dropped_not_ready,
+                                 (unsigned int)ring_buffer_available_data());
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(10));
                 } else {
-                    ESP_LOGE(TAG, "WebSocket send failed: %s", esp_err_to_name(ret));
-                    vTaskDelay(pdMS_TO_TICKS(100));
+                    ret = websocket_client_send_audio(stream_buffer, bytes_read, AUDIO_STREAM_SEND_TIMEOUT_MS);
+
+                    if (ret == ESP_OK) {
+                        total_bytes_streamed += bytes_read;
+                        chunk_count++;
+                        consecutive_send_failures = 0;
+                        ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)",
+                                 (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
+                    } else {
+                        dropped_send_fail++;
+                        consecutive_send_failures++;
+                        ESP_LOGW(TAG, "[STREAM] WebSocket send failed (%s). dropped_send_fail=%u",
+                                 esp_err_to_name(ret), (unsigned int)dropped_send_fail);
+                        if (consecutive_send_failures >= AUDIO_STREAM_MAX_SEND_FAILURES) {
+                            ESP_LOGE(TAG, "[STREAM] Aborting after %u consecutive send failures", (unsigned int)consecutive_send_failures);
+                            stt_pipeline_mark_stopped();
+                            aborted_due_to_error = true;
+                            break;
+                        }
+                        vTaskDelay(pdMS_TO_TICKS(25));
+                    }
                 }
             }
         } else {
-            // Not enough data - wait a bit
             vTaskDelay(pdMS_TO_TICKS(50));
         }
+
+        if ((xTaskGetTickCount() - last_health_log) >= pdMS_TO_TICKS(AUDIO_STREAM_HEALTH_LOG_MS)) {
+            ESP_LOGI(TAG, "[STREAM] sent=%u bytes chunks=%u dropped_busy=%u dropped_fail=%u buffer_level=%u",
+                     (unsigned int)total_bytes_streamed,
+                     (unsigned int)chunk_count,
+                     (unsigned int)dropped_not_ready,
+                     (unsigned int)dropped_send_fail,
+                     (unsigned int)ring_buffer_available_data());
+            last_health_log = xTaskGetTickCount();
+        }
+
+        if (!is_running) {
+            break;
+        }
     }
-    
-    ESP_LOGI(TAG, "Audio streaming task stopped (streamed %u bytes in %u chunks)", 
+
+    if (!is_running) {
+        stt_pipeline_dispatch_stop_event();
+    }
+
+    if (aborted_due_to_error) {
+        ESP_LOGW(TAG, "Audio streaming aborted due to transport errors");
+    }
+
+    ESP_LOGI(TAG, "Audio streaming task stopped (streamed %u bytes in %u chunks)",
              (unsigned int)total_bytes_streamed, (unsigned int)chunk_count);
     heap_caps_free(stream_buffer);
 
@@ -488,6 +570,69 @@ static void audio_streaming_task(void *pvParameters) {
     }
 
     vTaskDelete(NULL);
+}
+
+// Internal helpers
+static void stt_pipeline_mark_stopped(void) {
+    is_running = false;
+    is_recording = false;
+}
+
+static void stt_pipeline_dispatch_stop_event(void) {
+    if (s_stop_event_posted) {
+        return;
+    }
+
+    s_stop_event_posted = true;
+
+    system_event_t evt = {
+        .type = SYSTEM_EVENT_STT_STOPPED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+    };
+
+    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+        ESP_LOGW(TAG, "Failed to enqueue STT stop event");
+    }
+}
+
+static void stt_pipeline_reset_ring_buffer(void) {
+    if (g_audio_ring_buffer == NULL) {
+        return;
+    }
+
+    if (g_ring_buffer_mutex != NULL) {
+        if (xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(50))) {
+            g_ring_buffer_write_pos = 0;
+            g_ring_buffer_read_pos = 0;
+            g_ring_buffer_count = 0;
+            xSemaphoreGive(g_ring_buffer_mutex);
+        }
+    } else {
+        g_ring_buffer_write_pos = 0;
+        g_ring_buffer_read_pos = 0;
+        g_ring_buffer_count = 0;
+    }
+}
+
+static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks) {
+    while ((g_audio_capture_task_handle != NULL || g_audio_streaming_task_handle != NULL) &&
+           xTaskGetTickCount() < deadline_ticks) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    if (g_audio_capture_task_handle != NULL) {
+        TaskHandle_t handle = g_audio_capture_task_handle;
+        g_audio_capture_task_handle = NULL;
+        ESP_LOGW(TAG, "Force deleting audio capture task after timeout");
+        vTaskDelete(handle);
+    }
+
+    if (g_audio_streaming_task_handle != NULL) {
+        TaskHandle_t handle = g_audio_streaming_task_handle;
+        g_audio_streaming_task_handle = NULL;
+        ESP_LOGW(TAG, "Force deleting audio streaming task after timeout");
+        vTaskDelete(handle);
+    }
 }
 
 // Ring buffer helper functions
