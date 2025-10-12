@@ -1,5 +1,5 @@
 PS F:\Documents\College\6th Semester\Project\ESP_Warp> python main.py
-INFO:     Started server process [2520]
+INFO:     Started server process [18312]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -8,10 +8,10 @@ INFO:     Waiting for application startup.
 
 📡 Network Information:
    WiFi Network: wifi
-   IP Address: 10.87.102.58
+   IP Address: 172.24.158.58
    Interface: WiFi
-   Server URL: http://10.87.102.58:8000
-   WebSocket URL: ws://10.87.102.58:8000/ws
+   Server URL: http://172.24.158.58:8000
+   WebSocket URL: ws://172.24.158.58:8000/ws
 
 ✓ Groq AsyncClient initialized with model: openai/gpt-oss-20b
 Loading Vosk model from: ./model
@@ -19,7 +19,7 @@ LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=10 max-active=30
 LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:6:7:8:9:10
 LOG (VoskAPI:RemoveOrphanNodes():nnet-nnet.cc:948) Removed 1 orphan nodes.
 LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 2 orphan components.
-LOG (VoskAPI:Collapse():nnet-utils.cc:1488) Added 1 components, removed 2      
+LOG (VoskAPI:Collapse():nnet-utils.cc:1488) Added 1 components, removed 2
 LOG (VoskAPI:ReadDataFiles():model.cc:248) Loading i-vector extractor from ./model/ivector/final.ie
 LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:183) Computing derived variables for iVector extractor
 LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:204) Done.
@@ -35,31 +35,25 @@ LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo ./model/graph/phones/wo
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)        
-INFO:     10.87.102.214:54672 - "WebSocket /ws" [accepted]
+INFO:     172.24.158.214:56456 - "WebSocket /ws" [accepted]
 🔌 New WebSocket connection established
 INFO:     connection open
 ✓ Session initialized: esp32-cam-hotpin
-📷 [hotpin-998C64-24] Image received: image.jpg, 8651 bytes (8.45 KB)
-💾 [hotpin-998C64-24] Image saved: captured_images/hotpin-998C64-24_20251012_064123.jpg
-INFO:     10.87.102.214:54673 - "POST /image HTTP/1.1" 200 OK
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 86016 bytes of audio...
+🔄 [esp32-cam-hotpin] Processing 81920 bytes of audio...
 ✓ Transcription [esp32-cam-hotpin]: "hello"
 📝 [esp32-cam-hotpin] Transcript: "hello"
 🤖 [esp32-cam-hotpin] LLM response: "Hello! How can I help you today?"
 ✓ TTS synthesis completed: 111568 bytes generated
-✓ Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_5zunfb32.wav
+✓ Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_n26hp5fg.wav
 🔊 [esp32-cam-hotpin] Streaming 111568 bytes of audio response...
 ✓ [esp32-cam-hotpin] Response streaming complete
 🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-⚠ [esp32-cam-hotpin] Empty audio buffer, skipping processing
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-⚠ [esp32-cam-hotpin] Empty audio buffer, skipping processing
-📷 [hotpin-998C64-79] Image received: image.jpg, 7150 bytes (6.98 KB)
-💾 [hotpin-998C64-79] Image saved: captured_images/hotpin-998C64-79_20251012_064218.jpg
-INFO:     10.87.102.214:54674 - "POST /image HTTP/1.1" 200 OK
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-⚠ [esp32-cam-hotpin] Empty audio buffer, skipping processing
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-⚠ [esp32-cam-hotpin] Empty audio buffer, skipping processing
+INFO:     connection closed
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006)
+✓ Cleared context for session: esp32-cam-hotpin
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     172.24.158.214:56457 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin

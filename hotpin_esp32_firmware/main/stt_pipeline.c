@@ -21,9 +21,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include <string.h>
 
 static const char *TAG = TAG_STT;
+
+#define STT_STREAM_EVENT_START   (1U << 0)
+#define STT_STREAM_EVENT_STOP    (1U << 1)
+#define STT_STREAM_EVENT_SHUTDOWN (1U << 2)
+
+static stt_pipeline_handle_t s_pipeline_ctx = {
+    .stream_events = NULL,
+};
 
 // Ring buffer for audio accumulation
 static uint8_t *g_audio_ring_buffer = NULL;
@@ -36,6 +45,7 @@ static SemaphoreHandle_t g_ring_buffer_mutex = NULL;
 // Task handles
 static TaskHandle_t g_audio_capture_task_handle = NULL;
 static TaskHandle_t g_audio_streaming_task_handle = NULL;
+static volatile bool g_streaming_active = false;
 
 // State flags
 static bool is_initialized = false;
@@ -66,6 +76,8 @@ static void stt_pipeline_mark_stopped(void);
 static void stt_pipeline_dispatch_stop_event(void);
 static void stt_pipeline_reset_ring_buffer(void);
 static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks);
+static void stt_pipeline_wait_for_streaming_idle(TickType_t deadline_ticks);
+static bool stt_pipeline_stop_signal_received(void);
 
 // ===========================
 // Public Functions
@@ -129,10 +141,46 @@ esp_err_t stt_pipeline_init(void) {
         g_audio_ring_buffer = NULL;
         return ESP_ERR_NO_MEM;
     }
-    
+
+    if (s_pipeline_ctx.stream_events == NULL) {
+        s_pipeline_ctx.stream_events = xEventGroupCreate();
+        if (s_pipeline_ctx.stream_events == NULL) {
+            ESP_LOGE(TAG, "Failed to create stream control event group");
+            vSemaphoreDelete(g_ring_buffer_mutex);
+            g_ring_buffer_mutex = NULL;
+            heap_caps_free(g_audio_ring_buffer);
+            g_audio_ring_buffer = NULL;
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (g_audio_streaming_task_handle == NULL) {
+        ESP_LOGI(TAG, "[CORE AFFINITY] Creating persistent audio streaming task on Core %d", TASK_CORE_AUDIO_IO);
+        BaseType_t stream_ret = xTaskCreatePinnedToCore(
+            audio_streaming_task,
+            "stt_stream",
+            TASK_STACK_SIZE_MEDIUM,
+            NULL,
+            TASK_PRIORITY_STT_PROCESSING,
+            &g_audio_streaming_task_handle,
+            TASK_CORE_AUDIO_IO
+        );
+
+        if (stream_ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create persistent audio streaming task");
+            vSemaphoreDelete(g_ring_buffer_mutex);
+            g_ring_buffer_mutex = NULL;
+            vEventGroupDelete(s_pipeline_ctx.stream_events);
+            s_pipeline_ctx.stream_events = NULL;
+            heap_caps_free(g_audio_ring_buffer);
+            g_audio_ring_buffer = NULL;
+            return ESP_FAIL;
+        }
+    }
+
     is_initialized = true;
     ESP_LOGI(TAG, "✅ STT pipeline initialized");
-    
+
     return ESP_OK;
 }
 
@@ -145,24 +193,46 @@ esp_err_t stt_pipeline_deinit(void) {
     }
     
     // Stop recording if active
-    if (is_recording) {
+    if (is_recording || is_running) {
         stt_pipeline_stop();
     }
-    
+
+    if (s_pipeline_ctx.stream_events != NULL) {
+        xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_SHUTDOWN);
+    }
+
+    TickType_t shutdown_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(STT_TASK_STOP_WAIT_MS);
+    while (g_audio_streaming_task_handle != NULL && xTaskGetTickCount() < shutdown_deadline) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    if (g_audio_streaming_task_handle != NULL) {
+        ESP_LOGW(TAG, "Force deleting streaming task after shutdown timeout");
+        vTaskDelete(g_audio_streaming_task_handle);
+        g_audio_streaming_task_handle = NULL;
+    }
+
     // Free resources
     if (g_ring_buffer_mutex != NULL) {
         vSemaphoreDelete(g_ring_buffer_mutex);
         g_ring_buffer_mutex = NULL;
     }
-    
+
+    if (s_pipeline_ctx.stream_events != NULL) {
+        vEventGroupDelete(s_pipeline_ctx.stream_events);
+        s_pipeline_ctx.stream_events = NULL;
+    }
+
     if (g_audio_ring_buffer != NULL) {
         heap_caps_free(g_audio_ring_buffer);
         g_audio_ring_buffer = NULL;
     }
-    
+
+    g_streaming_active = false;
+
     is_initialized = false;
     ESP_LOGI(TAG, "STT pipeline deinitialized");
-    
+
     return ESP_OK;
 }
 
@@ -178,10 +248,10 @@ esp_err_t stt_pipeline_start(void) {
         ESP_LOGW(TAG, "STT pipeline already running");
         return ESP_OK;
     }
-    
-    // Initialize pipeline
-    if (stt_pipeline_init() != ESP_OK) {
-        return ESP_FAIL;
+
+    if (g_audio_streaming_task_handle == NULL || s_pipeline_ctx.stream_events == NULL) {
+        ESP_LOGE(TAG, "Streaming infrastructure not ready");
+        return ESP_ERR_INVALID_STATE;
     }
     
     // Reset ring buffer positions
@@ -210,28 +280,13 @@ esp_err_t stt_pipeline_start(void) {
         return ESP_FAIL;
     }
     
-    // Create audio streaming task (Priority 7, Core 0 for consistency)
-    ret = xTaskCreatePinnedToCore(
-        audio_streaming_task,
-        "stt_stream",
-        TASK_STACK_SIZE_MEDIUM,
-        NULL,
-        TASK_PRIORITY_STT_PROCESSING,
-        &g_audio_streaming_task_handle,
-    TASK_CORE_AUDIO_IO  // Core 0 - Keep both STT tasks on same core
-    );
-    
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create audio streaming task");
-        vTaskDelete(g_audio_capture_task_handle);
-        g_audio_capture_task_handle = NULL;
-        return ESP_FAIL;
-    }
-    
     is_running = true;
     is_recording = true;
     s_stop_event_posted = false;
     stt_pipeline_reset_ring_buffer();
+
+    xEventGroupClearBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_START);
 
     system_event_t evt = {
         .type = SYSTEM_EVENT_STT_STARTED,
@@ -248,30 +303,30 @@ esp_err_t stt_pipeline_start(void) {
 esp_err_t stt_pipeline_stop(void) {
     ESP_LOGI(TAG, "Stopping STT pipeline...");
 
-    if (!is_initialized && g_audio_capture_task_handle == NULL && g_audio_streaming_task_handle == NULL) {
+    if (!is_initialized) {
         ESP_LOGW(TAG, "STT pipeline not initialized");
         stt_pipeline_dispatch_stop_event();
         return ESP_OK;
     }
 
-    if (!is_running && g_audio_capture_task_handle == NULL && g_audio_streaming_task_handle == NULL) {
+    if (!is_running && g_audio_capture_task_handle == NULL && !g_streaming_active) {
         ESP_LOGW(TAG, "STT pipeline already stopped");
         stt_pipeline_dispatch_stop_event();
         return ESP_OK;
     }
 
     stt_pipeline_mark_stopped();
-
-    if (websocket_client_is_connected()) {
-        ESP_LOGI(TAG, "Sending EOS signal...");
-        websocket_client_send_eos();
-    }
+    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
 
     TickType_t deadline_ticks = xTaskGetTickCount() + pdMS_TO_TICKS(STT_TASK_STOP_WAIT_MS);
     stt_pipeline_wait_for_tasks_shutdown(deadline_ticks);
+    stt_pipeline_wait_for_streaming_idle(deadline_ticks);
 
     stt_pipeline_reset_ring_buffer();
-    stt_pipeline_dispatch_stop_event();
+
+    if (!g_streaming_active) {
+        stt_pipeline_dispatch_stop_event();
+    }
 
     ESP_LOGI(TAG, "STT pipeline stopped");
     return ESP_OK;
@@ -293,6 +348,10 @@ void stt_pipeline_cancel_capture(void) {
     if (clr_ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to clear audio buffers: %s", esp_err_to_name(clr_ret));
     }
+}
+
+const stt_pipeline_handle_t *stt_pipeline_get_handle(void) {
+    return &s_pipeline_ctx;
 }
 
 // ===========================
@@ -438,7 +497,7 @@ static void audio_capture_task(void *pvParameters) {
 }
 
 static void audio_streaming_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Audio streaming task started on Core %d", xPortGetCoreID());
+    ESP_LOGI(TAG, "Persistent audio streaming task started on Core %d", xPortGetCoreID());
 
     uint8_t *stream_buffer = heap_caps_malloc(
         AUDIO_STREAM_CHUNK_SIZE,
@@ -453,122 +512,154 @@ static void audio_streaming_task(void *pvParameters) {
 
     ESP_LOGI(TAG, "  ✓ Stream buffer allocated at %p", stream_buffer);
 
-    size_t bytes_read = 0;
-    uint32_t total_bytes_streamed = 0;
-    uint32_t chunk_count = 0;
-    uint32_t dropped_not_ready = 0;
-    uint32_t dropped_send_fail = 0;
-    uint32_t consecutive_send_failures = 0;
-    bool aborted_due_to_error = false;
-    TickType_t last_health_log = xTaskGetTickCount();
+    for (;;) {
+        EventBits_t wait_bits = xEventGroupWaitBits(
+            s_pipeline_ctx.stream_events,
+            STT_STREAM_EVENT_START | STT_STREAM_EVENT_SHUTDOWN,
+            pdTRUE,
+            pdFALSE,
+            portMAX_DELAY
+        );
 
-    while (is_running && !websocket_client_is_connected()) {
-        ESP_LOGW(TAG, "Waiting for WebSocket connection...");
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-
-    if (!websocket_client_is_connected()) {
-        ESP_LOGE(TAG, "WebSocket not connected - aborting streaming");
-        heap_caps_free(stream_buffer);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    while (is_running && !websocket_client_session_ready()) {
-        ESP_LOGW(TAG, "Waiting for WebSocket session readiness...");
-        vTaskDelay(pdMS_TO_TICKS(250));
-    }
-
-    if (!websocket_client_session_ready()) {
-        ESP_LOGE(TAG, "WebSocket session not ready - aborting streaming");
-        heap_caps_free(stream_buffer);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Starting audio streaming to server...");
-
-    while (is_running) {
-        if (!websocket_client_is_connected()) {
-            ESP_LOGE(TAG, "WebSocket disconnected during streaming");
-            stt_pipeline_mark_stopped();
-            aborted_due_to_error = true;
+        if ((wait_bits & STT_STREAM_EVENT_SHUTDOWN) != 0U) {
+            ESP_LOGI(TAG, "Streaming task received shutdown signal");
             break;
         }
 
-        size_t available = ring_buffer_available_data();
+        if ((wait_bits & STT_STREAM_EVENT_START) == 0U) {
+            continue;
+        }
 
-        if (available >= AUDIO_STREAM_CHUNK_SIZE) {
-            esp_err_t ret = ring_buffer_read(stream_buffer, AUDIO_STREAM_CHUNK_SIZE, &bytes_read);
+        ESP_LOGI(TAG, "Audio streaming session activated");
 
-            if (ret == ESP_OK && bytes_read > 0) {
-                if (!websocket_client_can_stream_audio()) {
-                    dropped_not_ready++;
-                    if ((dropped_not_ready % 25U) == 0U) {
-                        ESP_LOGW(TAG, "[STREAM] Dropping audio chunk (session busy). dropped_not_ready=%u buffer=%u",
-                                 (unsigned int)dropped_not_ready,
-                                 (unsigned int)ring_buffer_available_data());
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                } else {
-                    ret = websocket_client_send_audio(stream_buffer, bytes_read, AUDIO_STREAM_SEND_TIMEOUT_MS);
+        size_t bytes_read = 0;
+        uint32_t total_bytes_streamed = 0;
+        uint32_t chunk_count = 0;
+        uint32_t dropped_not_ready = 0;
+        uint32_t dropped_send_fail = 0;
+        uint32_t consecutive_send_failures = 0;
+        TickType_t last_health_log = xTaskGetTickCount();
+        bool aborted_due_to_error = false;
 
-                    if (ret == ESP_OK) {
-                        total_bytes_streamed += bytes_read;
-                        chunk_count++;
-                        consecutive_send_failures = 0;
-                        ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)",
-                                 (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
-                    } else {
-                        dropped_send_fail++;
-                        consecutive_send_failures++;
-                        ESP_LOGW(TAG, "[STREAM] WebSocket send failed (%s). dropped_send_fail=%u",
-                                 esp_err_to_name(ret), (unsigned int)dropped_send_fail);
-                        if (consecutive_send_failures >= AUDIO_STREAM_MAX_SEND_FAILURES) {
-                            ESP_LOGE(TAG, "[STREAM] Aborting after %u consecutive send failures", (unsigned int)consecutive_send_failures);
-                            stt_pipeline_mark_stopped();
-                            aborted_due_to_error = true;
-                            break;
+        g_streaming_active = true;
+
+        while (is_running && !stt_pipeline_stop_signal_received() && !websocket_client_is_connected()) {
+            ESP_LOGW(TAG, "Waiting for WebSocket connection...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+
+        if (!websocket_client_is_connected()) {
+            ESP_LOGE(TAG, "WebSocket not connected - streaming session aborted");
+            aborted_due_to_error = true;
+            stt_pipeline_mark_stopped();
+            xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+        }
+
+        while (!aborted_due_to_error && is_running && !stt_pipeline_stop_signal_received() && !websocket_client_session_ready()) {
+            ESP_LOGW(TAG, "Waiting for WebSocket session readiness...");
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
+
+        if (!aborted_due_to_error && !websocket_client_session_ready()) {
+            ESP_LOGE(TAG, "WebSocket session not ready - streaming session aborted");
+            aborted_due_to_error = true;
+            stt_pipeline_mark_stopped();
+            xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+        }
+
+        if (!aborted_due_to_error) {
+            ESP_LOGI(TAG, "Starting audio streaming to server...");
+        }
+
+        while (!aborted_due_to_error && is_running && !stt_pipeline_stop_signal_received()) {
+            if (!websocket_client_is_connected()) {
+                ESP_LOGE(TAG, "WebSocket disconnected during streaming");
+                stt_pipeline_mark_stopped();
+                xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                aborted_due_to_error = true;
+                break;
+            }
+
+            size_t available = ring_buffer_available_data();
+
+            if (available >= AUDIO_STREAM_CHUNK_SIZE) {
+                esp_err_t ret = ring_buffer_read(stream_buffer, AUDIO_STREAM_CHUNK_SIZE, &bytes_read);
+
+                if (ret == ESP_OK && bytes_read > 0) {
+                    if (!websocket_client_can_stream_audio()) {
+                        dropped_not_ready++;
+                        if ((dropped_not_ready % 25U) == 0U) {
+                            ESP_LOGW(TAG, "[STREAM] Dropping audio chunk (session busy). dropped_not_ready=%u buffer=%u",
+                                     (unsigned int)dropped_not_ready,
+                                     (unsigned int)ring_buffer_available_data());
                         }
-                        vTaskDelay(pdMS_TO_TICKS(25));
+                        vTaskDelay(pdMS_TO_TICKS(10));
+                    } else {
+                        ret = websocket_client_send_audio(stream_buffer, bytes_read, AUDIO_STREAM_SEND_TIMEOUT_MS);
+
+                        if (ret == ESP_OK) {
+                            total_bytes_streamed += bytes_read;
+                            chunk_count++;
+                            consecutive_send_failures = 0;
+                            ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)",
+                                     (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
+                        } else {
+                            dropped_send_fail++;
+                            consecutive_send_failures++;
+                            ESP_LOGW(TAG, "[STREAM] WebSocket send failed (%s). dropped_send_fail=%u",
+                                     esp_err_to_name(ret), (unsigned int)dropped_send_fail);
+                            if (consecutive_send_failures >= AUDIO_STREAM_MAX_SEND_FAILURES) {
+                                ESP_LOGE(TAG, "[STREAM] Aborting after %u consecutive send failures", (unsigned int)consecutive_send_failures);
+                                stt_pipeline_mark_stopped();
+                                xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                                aborted_due_to_error = true;
+                                break;
+                            }
+                            vTaskDelay(pdMS_TO_TICKS(25));
+                        }
                     }
                 }
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(50));
             }
+
+            if ((xTaskGetTickCount() - last_health_log) >= pdMS_TO_TICKS(AUDIO_STREAM_HEALTH_LOG_MS)) {
+                ESP_LOGI(TAG, "[STREAM] sent=%u bytes chunks=%u dropped_busy=%u dropped_fail=%u buffer_level=%u",
+                         (unsigned int)total_bytes_streamed,
+                         (unsigned int)chunk_count,
+                         (unsigned int)dropped_not_ready,
+                         (unsigned int)dropped_send_fail,
+                         (unsigned int)ring_buffer_available_data());
+                last_health_log = xTaskGetTickCount();
+            }
+        }
+
+        if (stt_pipeline_stop_signal_received()) {
+            ESP_LOGI(TAG, "Streaming task received stop signal");
+        }
+
+        if (aborted_due_to_error) {
+            ESP_LOGW(TAG, "Audio streaming aborted due to transport errors");
+        }
+
+        if (websocket_client_is_connected()) {
+            ESP_LOGI(TAG, "Sending EOS signal...");
+            websocket_client_send_eos();
         } else {
-            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_LOGW(TAG, "Skipping EOS - WebSocket disconnected");
         }
 
-        if ((xTaskGetTickCount() - last_health_log) >= pdMS_TO_TICKS(AUDIO_STREAM_HEALTH_LOG_MS)) {
-            ESP_LOGI(TAG, "[STREAM] sent=%u bytes chunks=%u dropped_busy=%u dropped_fail=%u buffer_level=%u",
-                     (unsigned int)total_bytes_streamed,
-                     (unsigned int)chunk_count,
-                     (unsigned int)dropped_not_ready,
-                     (unsigned int)dropped_send_fail,
-                     (unsigned int)ring_buffer_available_data());
-            last_health_log = xTaskGetTickCount();
-        }
+        ESP_LOGI(TAG, "Audio streaming session complete (streamed %u bytes in %u chunks)",
+                 (unsigned int)total_bytes_streamed,
+                 (unsigned int)chunk_count);
 
-        if (!is_running) {
-            break;
-        }
-    }
-
-    if (!is_running) {
+        g_streaming_active = false;
+        xEventGroupClearBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
         stt_pipeline_dispatch_stop_event();
     }
 
-    if (aborted_due_to_error) {
-        ESP_LOGW(TAG, "Audio streaming aborted due to transport errors");
-    }
-
-    ESP_LOGI(TAG, "Audio streaming task stopped (streamed %u bytes in %u chunks)",
-             (unsigned int)total_bytes_streamed, (unsigned int)chunk_count);
     heap_caps_free(stream_buffer);
-
-    if (g_audio_streaming_task_handle == xTaskGetCurrentTaskHandle()) {
-        g_audio_streaming_task_handle = NULL;
-    }
-
+    g_audio_streaming_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -614,9 +705,17 @@ static void stt_pipeline_reset_ring_buffer(void) {
     }
 }
 
+static bool stt_pipeline_stop_signal_received(void) {
+    if (s_pipeline_ctx.stream_events == NULL) {
+        return false;
+    }
+
+    EventBits_t bits = xEventGroupGetBits(s_pipeline_ctx.stream_events);
+    return (bits & STT_STREAM_EVENT_STOP) != 0U;
+}
+
 static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks) {
-    while ((g_audio_capture_task_handle != NULL || g_audio_streaming_task_handle != NULL) &&
-           xTaskGetTickCount() < deadline_ticks) {
+    while (g_audio_capture_task_handle != NULL && xTaskGetTickCount() < deadline_ticks) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
@@ -626,12 +725,15 @@ static void stt_pipeline_wait_for_tasks_shutdown(TickType_t deadline_ticks) {
         ESP_LOGW(TAG, "Force deleting audio capture task after timeout");
         vTaskDelete(handle);
     }
+}
 
-    if (g_audio_streaming_task_handle != NULL) {
-        TaskHandle_t handle = g_audio_streaming_task_handle;
-        g_audio_streaming_task_handle = NULL;
-        ESP_LOGW(TAG, "Force deleting audio streaming task after timeout");
-        vTaskDelete(handle);
+static void stt_pipeline_wait_for_streaming_idle(TickType_t deadline_ticks) {
+    while (g_streaming_active && xTaskGetTickCount() < deadline_ticks) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    if (g_streaming_active) {
+        ESP_LOGW(TAG, "Persistent streaming task still active after timeout");
     }
 }
 

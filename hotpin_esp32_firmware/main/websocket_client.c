@@ -360,7 +360,8 @@ bool websocket_client_can_stream_audio(void) {
     }
 
     return stage == WEBSOCKET_PIPELINE_STAGE_IDLE ||
-           stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION;
+        stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION ||
+        stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE;
 }
 
 void websocket_client_set_audio_callback(websocket_audio_callback_t callback, void *arg) {

@@ -9,8 +9,14 @@
 #define STT_PIPELINE_H
 
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include <stdint.h>
 #include <stdbool.h>
+
+typedef struct stt_pipeline_handle {
+	EventGroupHandle_t stream_events;
+} stt_pipeline_handle_t;
 
 /**
  * @brief Initialize STT pipeline
@@ -57,5 +63,10 @@ bool stt_pipeline_is_recording(void);
  * @brief Cancel any pending capture and preserve current ring buffer state
  */
 void stt_pipeline_cancel_capture(void);
+
+/**
+ * @brief Obtain internal STT pipeline handle (read-only)
+ */
+const stt_pipeline_handle_t *stt_pipeline_get_handle(void);
 
 #endif // STT_PIPELINE_H
