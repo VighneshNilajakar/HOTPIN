@@ -53,7 +53,6 @@
 // ===========================
 static void websocket_status_callback(websocket_status_t status, void *arg);
 static void websocket_connection_task(void *pvParameters);
-static void websocket_connection_cleanup(void);
 
 // ===========================
 // Global Variables
@@ -72,10 +71,10 @@ static volatile bool g_wifi_connected = false;
 static volatile bool g_websocket_connected = false;
 
 // WebSocket coordination
-static EventGroupHandle_t g_websocket_event_group = NULL;
+static EventGroupHandle_t g_network_event_group = NULL;
 
-#define WS_EVENT_WIFI_READY    BIT0
-#define WS_EVENT_SHUTDOWN      BIT1
+#define NETWORK_EVENT_WIFI_CONNECTED     BIT0
+#define NETWORK_EVENT_WEBSOCKET_CONNECTED BIT1
 
 // WiFi credentials from Kconfig (configured via .env file)
 #define WIFI_SSID      CONFIG_HOTPIN_WIFI_SSID
@@ -132,10 +131,10 @@ void app_main(void) {
     
     // Create synchronization primitives
     g_i2s_config_mutex = xSemaphoreCreateMutex();
-    g_websocket_event_group = xEventGroupCreate();
+    g_network_event_group = xEventGroupCreate();
     event_dispatcher_init();
 
-    if (!g_i2s_config_mutex || !g_websocket_event_group ||
+    if (!g_i2s_config_mutex || !g_network_event_group ||
         event_dispatcher_queue() == NULL) {
         ESP_LOGE(TAG, "Failed to create synchronization primitives");
         esp_restart();
@@ -254,8 +253,7 @@ void app_main(void) {
         }
     }
     
-    // WebSocket task will be started by state manager when needed
-    // Audio and camera tasks are managed by state manager
+    // WebSocket task now runs continuously; state manager handles camera/audio
     
     // ===========================
     // Phase 6: System Ready
@@ -390,16 +388,25 @@ static void websocket_status_callback(websocket_status_t status, void *arg) {
         case WEBSOCKET_STATUS_CONNECTED:
             ESP_LOGI(TAG, "🎉 WebSocket status callback: CONNECTED");
             g_websocket_connected = true;
+            if (g_network_event_group != NULL) {
+                xEventGroupSetBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            }
             break;
             
         case WEBSOCKET_STATUS_DISCONNECTED:
             ESP_LOGW(TAG, "⚠️ WebSocket status callback: DISCONNECTED");
             g_websocket_connected = false;
+            if (g_network_event_group != NULL) {
+                xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            }
             break;
             
         case WEBSOCKET_STATUS_ERROR:
             ESP_LOGE(TAG, "❌ WebSocket status callback: ERROR");
             g_websocket_connected = false;
+            if (g_network_event_group != NULL) {
+                xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            }
             break;
             
         default:
@@ -410,8 +417,8 @@ static void websocket_status_callback(websocket_status_t status, void *arg) {
 /**
  * @brief WebSocket connection management task
  * 
- * Waits for WiFi connection, then attempts to connect to WebSocket server
- * with automatic retry on failure.
+ * Maintains a persistent WebSocket connection while WiFi is available.
+ * Automatically retries with exponential backoff when disconnected.
  */
 static void websocket_connection_task(void *pvParameters) {
     const int MAX_RETRY_DELAY_MS = 30000;
@@ -421,153 +428,73 @@ static void websocket_connection_task(void *pvParameters) {
     ESP_LOGI(TAG, "WebSocket connection task started on Core %d", xPortGetCoreID());
 
     while (true) {
-        EventBits_t wait_bits = xEventGroupWaitBits(
-            g_websocket_event_group,
-            WS_EVENT_WIFI_READY | WS_EVENT_SHUTDOWN,
+        xEventGroupWaitBits(
+            g_network_event_group,
+            NETWORK_EVENT_WIFI_CONNECTED,
             pdFALSE,
             pdFALSE,
             portMAX_DELAY);
 
-        if (wait_bits & WS_EVENT_SHUTDOWN) {
-            break;
-        }
-
-        if (!(wait_bits & WS_EVENT_WIFI_READY)) {
-            continue;
-        }
-
         retry_delay_ms = 5000;
         attempt = 0;
 
-        while (!g_websocket_connected) {
-            EventBits_t bits_snapshot = xEventGroupGetBits(g_websocket_event_group);
-            if (bits_snapshot & WS_EVENT_SHUTDOWN) {
-                goto task_shutdown;
-            }
-            if (!(bits_snapshot & WS_EVENT_WIFI_READY)) {
-                ESP_LOGW(TAG, "WiFi not ready, pausing WebSocket connection attempts");
-                break;
-            }
-
-            attempt++;
-            ESP_LOGI(TAG, "🔌 Attempting WebSocket connection (attempt %d)...", attempt);
-
-            esp_err_t ret = websocket_client_connect();
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "❌ WebSocket connection failed: %s", esp_err_to_name(ret));
+        while ((xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
+            if (!websocket_client_is_connected()) {
+                attempt++;
+                ESP_LOGI(TAG, "🔌 Attempting WebSocket connection (attempt %d)...", attempt);
+                esp_err_t connect_ret = websocket_client_connect();
+                if (connect_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "❌ WebSocket connection failed: %s", esp_err_to_name(connect_ret));
+                }
             }
 
             TickType_t start = xTaskGetTickCount();
             TickType_t poll_delay = pdMS_TO_TICKS(200);
-            TickType_t max_wait = pdMS_TO_TICKS(retry_delay_ms);
+            TickType_t wait_duration = pdMS_TO_TICKS(retry_delay_ms);
 
-            while (!g_websocket_connected) {
-                if (xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_SHUTDOWN) {
-                    goto task_shutdown;
-                }
-
-                if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
-                    ESP_LOGW(TAG, "WiFi lost during WebSocket connection attempt");
+            while (!websocket_client_is_connected()) {
+                if ((xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) == 0) {
                     break;
                 }
 
-                if ((xTaskGetTickCount() - start) >= max_wait) {
+                if ((xTaskGetTickCount() - start) >= wait_duration) {
                     break;
                 }
 
                 vTaskDelay(poll_delay);
             }
 
-            if (g_websocket_connected) {
-                ESP_LOGI(TAG, "🎉 WebSocket connected and verified!");
-                break;
+            if (!websocket_client_is_connected()) {
+                xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+
+                if ((xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) == 0) {
+                    ESP_LOGW(TAG, "WiFi offline, waiting for reconnection");
+                    break;
+                }
+
+                retry_delay_ms = retry_delay_ms + (retry_delay_ms / 2);
+                if (retry_delay_ms > MAX_RETRY_DELAY_MS) {
+                    retry_delay_ms = MAX_RETRY_DELAY_MS;
+                }
+
+                continue;
             }
 
-            if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
-                ESP_LOGW(TAG, "WiFi offline, will wait for reconnection");
-                break;
+            ESP_LOGI(TAG, "📡 WebSocket connection active - monitoring link");
+            xEventGroupSetBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            retry_delay_ms = 5000;
+
+            while (websocket_client_is_connected() &&
+                   (xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
+                vTaskDelay(pdMS_TO_TICKS(2000));
             }
 
-            retry_delay_ms = retry_delay_ms + (retry_delay_ms / 2);
-            if (retry_delay_ms > MAX_RETRY_DELAY_MS) {
-                retry_delay_ms = MAX_RETRY_DELAY_MS;
-            }
-        }
-
-        if (!g_websocket_connected) {
-            continue;
-        }
-
-        ESP_LOGI(TAG, "📡 WebSocket connection active - entering monitor loop");
-
-        while (g_websocket_connected) {
-            EventBits_t monitor_bits = xEventGroupWaitBits(
-                g_websocket_event_group,
-                WS_EVENT_SHUTDOWN,
-                pdFALSE,
-                pdFALSE,
-                pdMS_TO_TICKS(10000));
-
-            if (monitor_bits & WS_EVENT_SHUTDOWN) {
-                goto task_shutdown;
-            }
-
-            if (!(xEventGroupGetBits(g_websocket_event_group) & WS_EVENT_WIFI_READY)) {
-                ESP_LOGW(TAG, "WiFi connectivity lost - WebSocket will retry when back online");
-                break;
-            }
-
-            if (!g_websocket_connected) {
-                ESP_LOGW(TAG, "WebSocket disconnected - restarting connection sequence");
-                break;
-            }
+            ESP_LOGW(TAG, "WebSocket link not healthy, restarting connection");
+            xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            websocket_client_force_stop();
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
     }
-
-task_shutdown:
-    ESP_LOGI(TAG, "WebSocket connection task shutting down");
-    websocket_connection_cleanup();
-    if (g_websocket_event_group != NULL) {
-        xEventGroupClearBits(g_websocket_event_group, WS_EVENT_SHUTDOWN);
-    }
-    g_websocket_task_handle = NULL;
-    vTaskDelete(NULL);
-}
-
-void websocket_connection_request_shutdown(void) {
-    if (g_websocket_event_group != NULL) {
-        xEventGroupSetBits(g_websocket_event_group, WS_EVENT_SHUTDOWN);
-    }
-}
-
-static void websocket_connection_cleanup(void) {
-    bool attempted_disconnect = false;
-    bool client_connected = websocket_client_is_connected();
-
-    if (client_connected) {
-        ESP_LOGI(TAG, "Initiating WebSocket client disconnect");
-        esp_err_t ret = websocket_client_disconnect();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WebSocket client disconnect returned %s", esp_err_to_name(ret));
-        }
-        attempted_disconnect = true;
-    }
-
-    for (int i = 0; i < 20 && websocket_client_is_connected(); ++i) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
-    if (websocket_client_is_connected()) {
-        ESP_LOGW(TAG, "WebSocket still connected after graceful attempt - force stopping");
-        esp_err_t stop_ret = websocket_client_force_stop();
-        if (stop_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Force stop returned %s", esp_err_to_name(stop_ret));
-        }
-    } else if (attempted_disconnect) {
-        ESP_LOGI(TAG, "WebSocket disconnect acknowledged");
-    }
-
-    g_websocket_connected = websocket_client_is_connected();
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -577,9 +504,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             case WIFI_EVENT_STA_START:
                 ESP_LOGI(TAG, "WiFi station started, connecting...");
                 led_controller_set_state(LED_STATE_FAST_BLINK);
-                if (g_websocket_event_group != NULL) {
-                    xEventGroupClearBits(g_websocket_event_group,
-                                         WS_EVENT_WIFI_READY);
+                if (g_network_event_group != NULL) {
+                    xEventGroupClearBits(g_network_event_group,
+                                         NETWORK_EVENT_WIFI_CONNECTED);
+                    xEventGroupClearBits(g_network_event_group,
+                                         NETWORK_EVENT_WEBSOCKET_CONNECTED);
                 }
                 esp_wifi_connect();
                 break;
@@ -589,8 +518,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 g_wifi_connected = false;
                 g_websocket_connected = false;
                 led_controller_set_state(LED_STATE_FAST_BLINK);
-                if (g_websocket_event_group != NULL) {
-                    xEventGroupClearBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
+                if (g_network_event_group != NULL) {
+                    xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WIFI_CONNECTED);
+                    xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
                 }
                 esp_wifi_connect();
                 break;
@@ -611,8 +541,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         if (state_manager_get_state() != SYSTEM_STATE_VOICE_ACTIVE) {
             led_controller_set_state(LED_STATE_BREATHING);
         }
-        if (g_websocket_event_group != NULL) {
-            xEventGroupSetBits(g_websocket_event_group, WS_EVENT_WIFI_READY);
+        if (g_network_event_group != NULL) {
+            xEventGroupSetBits(g_network_event_group, NETWORK_EVENT_WIFI_CONNECTED);
         }
         
         // WebSocket connection will be handled by websocket_connection_task

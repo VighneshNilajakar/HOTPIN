@@ -1,6 +1,7 @@
 """
 TTS Worker Module - Synchronous pyttsx3 Speech Synthesis
-Handles blocking text-to-speech generation in thread pool isolation
+Handles blocking text-to-speech generation in thread pool isolation while
+normalizing output to the ESP32's 16 kHz mono PCM requirement.
 """
 
 import os
@@ -18,7 +19,7 @@ except ImportError as exc:
 # TTS engine configuration
 DEFAULT_RATE = 175  # Words per minute (moderate speed for clarity)
 
-TARGET_SAMPLE_RATE = 16000  # Match ESP32 microphone pipeline
+TARGET_SAMPLE_RATE = 16000  # Fixed 16 kHz to match ESP32 voice pipeline
 TARGET_SAMPLE_WIDTH = 2     # 16-bit PCM
 TARGET_CHANNELS = 1         # Mono playback
 
@@ -82,7 +83,7 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
         rate: Speech rate in words per minute (default: 175)
     
     Returns:
-        bytes: Complete WAV audio file data
+        bytes: Complete WAV audio file data normalized to 16 kHz mono PCM
     
     Raises:
         Exception: If synthesis fails or engine initialization fails

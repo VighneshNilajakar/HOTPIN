@@ -42,7 +42,6 @@ static bool s_tts_playback_active = false;
 
 // External synchronization primitive
 extern SemaphoreHandle_t g_i2s_config_mutex;
-extern void websocket_connection_request_shutdown(void);
 
 // Task handles for coordination
 static TaskHandle_t camera_task_handle = NULL;
@@ -672,6 +671,11 @@ static esp_err_t handle_camera_capture(void) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        ESP_LOGW(TAG, "Camera capture not allowed while voice mode is active");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     s_capture_in_progress = true;
 
     led_controller_set_state(LED_STATE_FLASH);
@@ -682,110 +686,31 @@ static esp_err_t handle_camera_capture(void) {
 
     bool capture_success = false;
     esp_err_t ret = ESP_OK;
-    bool voice_pipeline_paused = false;
-    bool audio_was_initialized = false;
     bool camera_initialized_here = false;
-    bool mutex_acquired = false;
 
-    // Fast path when camera is already armed
-    if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
-        if (!camera_controller_is_initialized()) {
-            ESP_LOGW(TAG, "Camera not initialized in standby; attempting init");
-            esp_err_t init_ret = camera_controller_init();
-            if (init_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(init_ret));
-                ret = init_ret;
-                goto finalize_capture;
-            }
-        }
-        ret = capture_and_upload_image();
-        capture_success = (ret == ESP_OK);
-        goto finalize_capture;
-    }
-
-    // If another state requested capture, try without touching audio path
-    if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
+    if (current_state != SYSTEM_STATE_CAMERA_STANDBY) {
         ESP_LOGW(TAG, "Camera capture requested during %s", state_to_string(current_state));
-        ret = capture_and_upload_image();
-        capture_success = (ret == ESP_OK);
-        goto finalize_capture;
-    }
-
-    ESP_LOGI(TAG, "Pausing voice pipelines prior to capture");
-    stt_pipeline_stop();
-    wait_for_voice_pipeline_shutdown();
-    tts_decoder_stop();
-    voice_pipeline_paused = true;
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    ESP_LOGI(TAG, "Acquiring I2S mutex for capture");
-    if (xSemaphoreTake(g_i2s_config_mutex, pdMS_TO_TICKS(STATE_TRANSITION_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to acquire I2S mutex for capture");
-        if (voice_pipeline_paused) {
-            stt_pipeline_start();
-            tts_decoder_start();
-        }
-        ret = ESP_ERR_TIMEOUT;
-        goto finalize_capture;
-    }
-
-    mutex_acquired = true;
-    audio_was_initialized = audio_driver_is_initialized();
-
-    if (audio_was_initialized) {
-        ESP_LOGI(TAG, "Stopping audio driver before camera activation");
-        ret = audio_driver_deinit();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Audio driver deinit failed: %s", esp_err_to_name(ret));
-            goto restore_voice_path;
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     if (!camera_controller_is_initialized()) {
-        ESP_LOGI(TAG, "Initializing camera for capture");
+        ESP_LOGI(TAG, "Camera not initialized; attempting setup before capture");
         ret = camera_controller_init();
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(ret));
-            goto restore_voice_path;
+            ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(ret));
+            goto finalize_capture;
         }
-        camera_initialized_here = true;
+        camera_initialized_here = (current_state != SYSTEM_STATE_CAMERA_STANDBY);
     }
 
     ret = capture_and_upload_image();
     capture_success = (ret == ESP_OK);
 
-restore_voice_path:
-    if (camera_initialized_here) {
-        camera_controller_deinit();
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    if (voice_pipeline_paused) {
-        if (audio_was_initialized) {
-            ESP_LOGI(TAG, "Restoring audio driver after capture");
-            esp_err_t audio_ret = audio_driver_init();
-            if (audio_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to reinitialize audio driver: %s", esp_err_to_name(audio_ret));
-                if (ret == ESP_OK) {
-                    ret = audio_ret;
-                }
-            } else {
-                stt_pipeline_start();
-                tts_decoder_start();
-            }
-        } else {
-            stt_pipeline_start();
-            tts_decoder_start();
-        }
-    }
-
-    if (mutex_acquired) {
-        xSemaphoreGive(g_i2s_config_mutex);
-        mutex_acquired = false;
-    }
-
 finalize_capture:
+    if (camera_initialized_here) {
+        ESP_LOGI(TAG, "Deinitializing temporary camera session after capture");
+        camera_controller_deinit();
+    }
+
     if (capture_success) {
         led_state_t next_led = (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
                                LED_STATE_SOLID : LED_STATE_BREATHING;
@@ -795,10 +720,7 @@ finalize_capture:
         if (beep_ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
         }
-    }
-
-    if (mutex_acquired) {
-        xSemaphoreGive(g_i2s_config_mutex);
+        led_controller_set_state(LED_STATE_BREATHING);
     }
 
     s_capture_in_progress = false;
@@ -968,12 +890,14 @@ static esp_err_t handle_shutdown(void) {
     stt_pipeline_stop();
     tts_decoder_stop();
     
-    ESP_LOGI(TAG, "Requesting WebSocket shutdown");
-    websocket_connection_request_shutdown();
-
-    for (int i = 0; i < 40 && websocket_client_is_connected(); ++i) {
-        vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "Stopping WebSocket client");
+    if (websocket_client_is_connected()) {
+        esp_err_t ws_ret = websocket_client_disconnect();
+        if (ws_ret != ESP_OK) {
+            ESP_LOGW(TAG, "WebSocket disconnect returned %s", esp_err_to_name(ws_ret));
+        }
     }
+    websocket_client_force_stop();
     
     ESP_LOGI(TAG, "✅ Shutdown complete");
     return ESP_OK;
