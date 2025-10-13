@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/stream_buffer.h"
 #include "esp_timer.h"
 #include <string.h>
 #include <stdint.h>
@@ -39,14 +40,13 @@ typedef struct {
     uint32_t data_size;      // Bytes of PCM data reported by header
 } wav_runtime_info_t;
 
-// Audio buffer queue
-#define AUDIO_QUEUE_SIZE        10
-#define AUDIO_CHUNK_SIZE        4096
-
-typedef struct {
-    uint8_t *data;
-    size_t length;
-} audio_chunk_t;
+// Stream buffer for audio data
+#define TTS_STREAM_BUFFER_SIZE (16 * 1024)  // 16KB buffer for incoming audio
+#define TTS_STREAM_BUFFER_TRIGGER_LEVEL 1   // Trigger on any data
+#define AUDIO_CHUNK_SIZE        4096        // DMA buffer size for I2S playback
+static StreamBufferHandle_t g_audio_stream_buffer = NULL;
+static uint8_t* g_stream_buffer_storage = NULL; // Storage will be in PSRAM
+static StaticStreamBuffer_t s_stream_buffer_struct;
 
 // State management
 static bool is_initialized = false;
@@ -66,8 +66,7 @@ static uint8_t *s_stereo_scratch = NULL;
 static size_t s_stereo_scratch_size = 0;
 static size_t s_stereo_scratch_capacity_samples = 0;
 
-// Playback queue and task
-static QueueHandle_t g_audio_queue = NULL;
+// Playback task
 static TaskHandle_t g_playback_task_handle = NULL;
 
 #define WAV_HEADER_BUFFER_MAX   8192
@@ -75,7 +74,6 @@ static TaskHandle_t g_playback_task_handle = NULL;
 // Buffer for header accumulation
 static uint8_t header_buffer[WAV_HEADER_BUFFER_MAX] __attribute__((aligned(4)));
 static volatile size_t header_bytes_received = 0;
-static volatile bool eos_signal_queued = false;
 
 // ===========================
 // Private Function Declarations
@@ -99,11 +97,28 @@ esp_err_t tts_decoder_init(void) {
         return ESP_OK;
     }
     
-    // Create audio queue
-    g_audio_queue = xQueueCreate(AUDIO_QUEUE_SIZE, sizeof(audio_chunk_t));
-    if (g_audio_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create audio queue");
-        return ESP_ERR_NO_MEM;
+    // Create audio stream buffer in PSRAM
+    if (g_audio_stream_buffer == NULL) {
+        ESP_LOGI(TAG, "Allocating %d byte PSRAM buffer for TTS stream", TTS_STREAM_BUFFER_SIZE);
+        g_stream_buffer_storage = (uint8_t *)heap_caps_malloc(TTS_STREAM_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+        if (g_stream_buffer_storage == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate PSRAM for stream buffer storage");
+            return ESP_ERR_NO_MEM;
+        }
+
+        g_audio_stream_buffer = xStreamBufferCreateStatic(
+            TTS_STREAM_BUFFER_SIZE,
+            TTS_STREAM_BUFFER_TRIGGER_LEVEL,
+            g_stream_buffer_storage,
+            &s_stream_buffer_struct
+        );
+
+        if (g_audio_stream_buffer == NULL) {
+            ESP_LOGE(TAG, "Failed to create audio stream buffer");
+            heap_caps_free(g_stream_buffer_storage);
+            g_stream_buffer_storage = NULL;
+            return ESP_ERR_NO_MEM;
+        }
     }
     
     // Register audio callback with WebSocket client
@@ -128,17 +143,14 @@ esp_err_t tts_decoder_deinit(void) {
         tts_decoder_stop();
     }
     
-    // Delete queue
-    if (g_audio_queue != NULL) {
-        // Clear any remaining items
-        audio_chunk_t chunk;
-        while (xQueueReceive(g_audio_queue, &chunk, 0) == pdTRUE) {
-            if (chunk.data != NULL) {
-                heap_caps_free(chunk.data);
-            }
-        }
-        vQueueDelete(g_audio_queue);
-        g_audio_queue = NULL;
+    // Delete stream buffer
+    if (g_audio_stream_buffer != NULL) {
+        vStreamBufferDelete(g_audio_stream_buffer);
+        g_audio_stream_buffer = NULL;
+    }
+    if (g_stream_buffer_storage != NULL) {
+        heap_caps_free(g_stream_buffer_storage);
+        g_stream_buffer_storage = NULL;
     }
 
     if (s_stereo_scratch != NULL) {
@@ -178,7 +190,6 @@ esp_err_t tts_decoder_start(void) {
     header_bytes_received = 0;
     bytes_received = 0;
     pcm_bytes_played = 0;
-    eos_signal_queued = false;
     playback_feedback_sent = false;
     eos_requested = false;
     memset(&wav_info, 0, sizeof(wav_info));
@@ -231,32 +242,7 @@ esp_err_t tts_decoder_stop(void) {
     
     is_playing = false;
     is_running = false;
-    eos_requested = false;
-
-    // Notify playback task to exit quickly
-    if (g_audio_queue != NULL && !eos_signal_queued) {
-        audio_chunk_t stop_signal = {
-            .data = NULL,
-            .length = 0
-        };
-
-        audio_chunk_t dropped;
-        for (int attempts = 0; attempts < 3; attempts++) {
-            if (xQueueSend(g_audio_queue, &stop_signal, pdMS_TO_TICKS(10)) == pdTRUE) {
-                eos_signal_queued = true;
-                break;
-            }
-            if (xQueueReceive(g_audio_queue, &dropped, 0) == pdTRUE) {
-                if (dropped.data != NULL) {
-                    heap_caps_free(dropped.data);
-                }
-            }
-        }
-
-        if (!eos_signal_queued) {
-            ESP_LOGW(TAG, "Unable to queue playback stop sentinel during shutdown");
-        }
-    }
+    eos_requested = true;
 
     // Wait for playback task to cleanly terminate
     const TickType_t wait_step = pdMS_TO_TICKS(10);
@@ -297,117 +283,100 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
         ESP_LOGW(TAG, "Decoder not running - dropping %zu-byte chunk", len);
         return;
     }
-    
-    // Allocate memory for chunk
-    uint8_t *chunk_data = heap_caps_aligned_alloc(4, len, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    if (chunk_data == NULL) {
-        ESP_LOGW(TAG, "DMA-capable alloc failed, attempting fallback for %zu-byte chunk", len);
-        chunk_data = heap_caps_malloc(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    }
-    if (chunk_data == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate memory for audio chunk (%zu bytes)", len);
-        return;
-    }
-    
-    memcpy(chunk_data, data, len);
-    
-    // Create chunk descriptor
-    audio_chunk_t chunk = {
-        .data = chunk_data,
-        .length = len
-    };
-    
-    // Send to playback queue
-    const TickType_t enqueue_timeout = pdMS_TO_TICKS(1000);
-    if (xQueueSend(g_audio_queue, &chunk, enqueue_timeout) != pdTRUE) {
-        UBaseType_t queued = uxQueueMessagesWaiting(g_audio_queue);
-        ESP_LOGW(TAG, "Audio queue full (depth=%u) after %lu ms wait - dropping %zu-byte chunk",
-                 (unsigned int)queued, (unsigned long)(enqueue_timeout * portTICK_PERIOD_MS), len);
-        heap_caps_free(chunk_data);
-    } else {
-        bytes_received += len;
-        ESP_LOGD(TAG, "Queued audio chunk (%zu bytes, total received: %zu)", len, bytes_received);
+
+    if (g_audio_stream_buffer != NULL) {
+        size_t bytes_sent = xStreamBufferSend(g_audio_stream_buffer, data, len, pdMS_TO_TICKS(100));
+        if (bytes_sent != len) {
+            ESP_LOGW(TAG, "Stream buffer full or timeout - dropped %d bytes", len - bytes_sent);
+        } else {
+            bytes_received += len;
+            ESP_LOGD(TAG, "Sent %zu bytes to stream buffer (total received: %zu)", len, bytes_received);
+        }
     }
 }
 
 static void tts_playback_task(void *pvParameters) {
     ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
-    
-    audio_chunk_t chunk;
-    esp_err_t playback_result = ESP_OK;
-    
-    while (true) {
-        // Wait for audio chunk
-        if (xQueueReceive(g_audio_queue, &chunk, pdMS_TO_TICKS(100)) == pdTRUE) {
-            if (chunk.data == NULL) {
-                ESP_LOGI(TAG, "Playback stop signal received");
-                eos_requested = false;
-                break;
-            }
 
-            // Parse header if not done yet
+    uint8_t dma_buffer[AUDIO_CHUNK_SIZE];
+    esp_err_t playback_result = ESP_OK;
+
+    while (is_running) {
+        // Wait for data in the stream buffer
+        size_t bytes_received_from_stream = xStreamBufferReceive(
+            g_audio_stream_buffer,
+            dma_buffer,
+            sizeof(dma_buffer),
+            pdMS_TO_TICKS(100) // Wait up to 100ms for data
+        );
+
+        if (bytes_received_from_stream > 0) {
+            // We have data, process it
             if (!header_parsed) {
-                if (header_bytes_received + chunk.length > WAV_HEADER_BUFFER_MAX) {
+                // Still parsing header - accumulate into header_buffer
+                if (header_bytes_received + bytes_received_from_stream > WAV_HEADER_BUFFER_MAX) {
                     ESP_LOGE(TAG, "Header staging buffer overflow (%zu + %zu)",
-                             header_bytes_received, chunk.length);
+                             header_bytes_received, bytes_received_from_stream);
                     is_running = false;
                     playback_result = ESP_ERR_INVALID_SIZE;
-                } else {
-                    memcpy(header_buffer + header_bytes_received, chunk.data, chunk.length);
-                    header_bytes_received += chunk.length;
-
-                    size_t header_consumed = 0;
-                    esp_err_t ret = parse_wav_header(header_buffer, header_bytes_received, &header_consumed);
-                    if (ret == ESP_OK) {
-                        header_parsed = true;
-                        print_wav_info(&wav_info);
-
-                        if (!playback_feedback_sent) {
-                            esp_err_t fb_ret = audio_feedback_beep_single(false);
-                            if (fb_ret != ESP_OK) {
-                                ESP_LOGW(TAG, "Playback start feedback failed: %s", esp_err_to_name(fb_ret));
-                            } else {
-                                ESP_LOGI(TAG, "🔔 Playback start feedback dispatched (bytes_received=%zu)", bytes_received);
-                            }
-                            playback_feedback_sent = true;
-                        }
-
-                        esp_err_t clk_ret = audio_driver_set_tx_sample_rate(wav_info.sample_rate);
-                        if (clk_ret != ESP_OK) {
-                            ESP_LOGW(TAG, "Unable to set TX sample rate to %u Hz: %s",
-                                     (unsigned int)wav_info.sample_rate, esp_err_to_name(clk_ret));
-                        }
-
-                        size_t pcm_len = header_bytes_received - header_consumed;
-                        if (pcm_len > 0) {
-                            size_t accounted = 0;
-                            esp_err_t write_ret = write_pcm_chunk_to_driver(header_buffer + header_consumed,
-                                                                           pcm_len,
-                                                                           &accounted);
-                            if (write_ret == ESP_OK) {
-                                pcm_bytes_played += accounted;
-                                ESP_LOGD(TAG, "Played %zu bytes from initial chunk (total: %zu)",
-                                         accounted, pcm_bytes_played);
-                            } else {
-                                ESP_LOGE(TAG, "Initial PCM write failed: %s", esp_err_to_name(write_ret));
-                            }
-                        }
-
-                        header_bytes_received = 0;  // Reset buffer for future sessions
-                    } else if (ret == ESP_ERR_INVALID_SIZE) {
-                        ESP_LOGD(TAG, "Awaiting more header bytes (%zu collected)", header_bytes_received);
-                    } else {
-                        ESP_LOGE(TAG, "Failed to parse WAV header: %s", esp_err_to_name(ret));
-                        is_running = false;
-                        playback_result = ret;
-                    }
+                    break;
                 }
 
-                heap_caps_free(chunk.data);
-                continue;
+                memcpy(header_buffer + header_bytes_received, dma_buffer, bytes_received_from_stream);
+                header_bytes_received += bytes_received_from_stream;
 
+                size_t header_consumed = 0;
+                esp_err_t ret = parse_wav_header(header_buffer, header_bytes_received, &header_consumed);
+                if (ret == ESP_OK) {
+                    header_parsed = true;
+                    print_wav_info(&wav_info);
+
+                    if (!playback_feedback_sent) {
+                        esp_err_t fb_ret = audio_feedback_beep_single(false);
+                        if (fb_ret != ESP_OK) {
+                            ESP_LOGW(TAG, "Playback start feedback failed: %s", esp_err_to_name(fb_ret));
+                        } else {
+                            ESP_LOGI(TAG, "🔔 Playback start feedback dispatched (bytes_received=%zu)", bytes_received);
+                        }
+                        playback_feedback_sent = true;
+                    }
+
+                    esp_err_t clk_ret = audio_driver_set_tx_sample_rate(wav_info.sample_rate);
+                    if (clk_ret != ESP_OK) {
+                        ESP_LOGW(TAG, "Unable to set TX sample rate to %u Hz: %s",
+                                 (unsigned int)wav_info.sample_rate, esp_err_to_name(clk_ret));
+                    }
+
+                    // Play any remaining PCM data from the header buffer
+                    size_t pcm_len = header_bytes_received - header_consumed;
+                    if (pcm_len > 0) {
+                        size_t accounted = 0;
+                        esp_err_t write_ret = write_pcm_chunk_to_driver(header_buffer + header_consumed,
+                                                                       pcm_len,
+                                                                       &accounted);
+                        if (write_ret == ESP_OK) {
+                            pcm_bytes_played += accounted;
+                            ESP_LOGD(TAG, "Played %zu bytes from initial chunk (total: %zu)",
+                                     accounted, pcm_bytes_played);
+                        } else {
+                            ESP_LOGE(TAG, "Initial PCM write failed: %s", esp_err_to_name(write_ret));
+                            playback_result = write_ret;
+                            is_running = false;
+                            break;
+                        }
+                    }
+
+                    header_bytes_received = 0;  // Reset buffer for future sessions
+                } else if (ret == ESP_ERR_INVALID_SIZE) {
+                    ESP_LOGD(TAG, "Awaiting more header bytes (%zu collected)", header_bytes_received);
+                } else {
+                    ESP_LOGE(TAG, "Failed to parse WAV header: %s", esp_err_to_name(ret));
+                    is_running = false;
+                    playback_result = ret;
+                    break;
+                }
             } else {
-                // Header already parsed - play PCM data directly
+                // Header already parsed - play PCM data directly from dma_buffer
                 if (!playback_feedback_sent) {
                     esp_err_t fb_ret = audio_feedback_beep_single(false);
                     if (fb_ret != ESP_OK) {
@@ -419,85 +388,31 @@ static void tts_playback_task(void *pvParameters) {
                 }
 
                 size_t accounted = 0;
-                esp_err_t ret = write_pcm_chunk_to_driver(chunk.data, chunk.length,
-                                                          &accounted);
-                
+                esp_err_t ret = write_pcm_chunk_to_driver(dma_buffer, bytes_received_from_stream, &accounted);
+
                 if (ret == ESP_OK) {
                     pcm_bytes_played += accounted;
-                    UBaseType_t queued = (g_audio_queue != NULL) ? uxQueueMessagesWaiting(g_audio_queue) : 0;
-                    ESP_LOGD(TAG, "Played %zu bytes (total: %zu, queue depth: %u)",
-                             accounted, pcm_bytes_played, (unsigned int)queued);
+                    ESP_LOGD(TAG, "Played %zu bytes (total: %zu)", accounted, pcm_bytes_played);
                 } else {
                     ESP_LOGE(TAG, "Audio playback error: %s", esp_err_to_name(ret));
                     playback_result = ret;
                     is_running = false;
+                    break;
                 }
             }
-            
-            // Free chunk memory
-            heap_caps_free(chunk.data);
-
-            if (eos_requested && g_audio_queue != NULL && uxQueueMessagesWaiting(g_audio_queue) == 0) {
-                ESP_LOGI(TAG, "EOS drain complete - terminating playback task");
+        } else {
+            // Timeout occurred - check if we should exit
+            if (eos_requested && xStreamBufferIsEmpty(g_audio_stream_buffer)) {
+                ESP_LOGI(TAG, "EOS requested and stream buffer is empty. Exiting playback task.");
                 eos_requested = false;
-                break;
-            }
-        }
-        else {
-            if (eos_requested && g_audio_queue != NULL && uxQueueMessagesWaiting(g_audio_queue) == 0) {
-                ESP_LOGI(TAG, "EOS idle timeout - terminating playback task");
-                eos_requested = false;
-                break;
-            }
-
-            if (!is_running && g_audio_queue != NULL && uxQueueMessagesWaiting(g_audio_queue) == 0) {
                 break;
             }
         }
     }
     
-    // Flush any remaining queued chunks
-    while (xQueueReceive(g_audio_queue, &chunk, 0) == pdTRUE) {
-        if (chunk.data != NULL) {
-            heap_caps_free(chunk.data);
-        }
-    }
-
+    ESP_LOGI(TAG, "TTS playback task exiting (played %zu bytes)", pcm_bytes_played);
     is_running = false;
-    is_playing = false;
-    eos_signal_queued = false;
-
-    if (pcm_bytes_played > 0) {
-        esp_err_t clk_ret = audio_driver_set_tx_sample_rate(CONFIG_AUDIO_SAMPLE_RATE);
-        if (clk_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to restore TX sample rate to %u Hz: %s",
-                     (unsigned int)CONFIG_AUDIO_SAMPLE_RATE, esp_err_to_name(clk_ret));
-        }
-
-        esp_err_t fb_ret = audio_feedback_beep_double(false);
-        if (fb_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Playback completion feedback failed: %s", esp_err_to_name(fb_ret));
-        } else {
-            ESP_LOGI(TAG, "🔔 Playback completion feedback dispatched (total bytes: %zu)", pcm_bytes_played);
-        }
-    }
-
-    system_event_t evt = {
-        .type = SYSTEM_EVENT_TTS_PLAYBACK_FINISHED,
-        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
-        .data.tts = {
-            .result = playback_result,
-        },
-    };
-    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
-        ESP_LOGW(TAG, "Failed to enqueue TTS playback finished event: %s",
-                 esp_err_to_name(playback_result));
-    }
-
-    ESP_LOGI(TAG, "TTS playback task stopped");
-    if (g_playback_task_handle == xTaskGetCurrentTaskHandle()) {
-        g_playback_task_handle = NULL;
-    }
+    g_playback_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -699,7 +614,7 @@ bool tts_decoder_has_pending_audio(void) {
         return false;
     }
 
-    if (g_audio_queue != NULL && uxQueueMessagesWaiting(g_audio_queue) > 0) {
+    if (g_audio_stream_buffer != NULL && xStreamBufferBytesAvailable(g_audio_stream_buffer) > 0) {
         return true;
     }
 
@@ -756,29 +671,12 @@ esp_err_t tts_decoder_wait_for_idle(uint32_t timeout_ms) {
 }
 
 void tts_decoder_notify_end_of_stream(void) {
-    if (!is_running || g_audio_queue == NULL) {
+    if (!is_running) {
         return;
     }
-
-    if (eos_signal_queued) {
-        ESP_LOGD(TAG, "EOS sentinel already queued");
-        return;
-    }
-
-    audio_chunk_t stop_signal = {
-        .data = NULL,
-        .length = 0
-    };
 
     eos_requested = true;
-
-    if (xQueueSend(g_audio_queue, &stop_signal, pdMS_TO_TICKS(500)) == pdTRUE) {
-        eos_signal_queued = true;
-        ESP_LOGI(TAG, "Queued TTS playback stop sentinel (server EOS)");
-    } else {
-        UBaseType_t depth = g_audio_queue ? uxQueueMessagesWaiting(g_audio_queue) : 0;
-        ESP_LOGW(TAG, "Failed to queue EOS sentinel (queue depth=%u) - waiting for natural drain", (unsigned int)depth);
-    }
+    ESP_LOGI(TAG, "TTS end-of-stream signaled");
 }
 
 static void print_wav_info(const wav_runtime_info_t *info) {
