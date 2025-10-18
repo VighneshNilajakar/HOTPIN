@@ -1,0 +1,37 @@
+PS F:\Documents\HOTPIN> python main.py
+INFO:     Started server process [7588]
+INFO:     Waiting for application startup.
+
+============================================================
+🚀 Hotpin Prototype Server Starting...
+============================================================
+
+📡 Network Information:
+   WiFi Network: wifi
+   IP Address: 10.184.66.58
+   Interface: WiFi
+   Server URL: http://10.184.66.58:8000
+   WebSocket URL: ws://10.184.66.58:8000/ws
+
+✓ Groq AsyncClient initialized with model: openai/gpt-oss-20b
+✗ Failed to initialize Vosk model: Vosk model not found at: ./model
+Please download a Vosk model and place it in the specified directory.
+Download from: https://alphacephei.com/vosk/models
+⚠ Server will start but STT functionality will not work
+✓ pyttsx3 TTS engine test successful
+============================================================
+✓ Server ready at ws://0.0.0.0:8000/ws
+============================================================
+
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     10.184.66.214:57237 - "WebSocket /ws" [accepted]
+🔌 New WebSocket connection established
+INFO:     connection open
+✓ Session initialized: esp32-cam-hotpin
+📷 [hotpin-998C64-18] Image received: image.jpg, 16187 bytes (15.81 KB)
+💾 [hotpin-998C64-18] Image saved: captured_images/hotpin-998C64-18_20251018_172653.jpg
+INFO:     10.184.66.214:57238 - "POST /image HTTP/1.1" 200 OK
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed
