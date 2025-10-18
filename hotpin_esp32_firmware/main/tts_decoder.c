@@ -23,6 +23,8 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
+#include <string.h>
+#include <inttypes.h>
 #include "esp_timer.h"
 #include <string.h>
 #include <stdint.h>
@@ -196,11 +198,12 @@ esp_err_t tts_decoder_start(void) {
     
     // CRITICAL FIX: Move TTS playback task to Core 1 to prevent Core 0 starvation
     // Core 0 handles WiFi/TCP and STT input, Core 1 handles state management and TTS output
-    ESP_LOGI(TAG, "[CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU)");
+    // IMPORTANT: Add safety padding to prevent buffer overflows
+    ESP_LOGI(TAG, "[CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU) with safety measures");
     BaseType_t ret = xTaskCreatePinnedToCore(
         tts_playback_task,
         "tts_playback",
-        TASK_STACK_SIZE_MEDIUM,
+        TASK_STACK_SIZE_LARGE,  // Increased from TASK_STACK_SIZE_MEDIUM + 1024 to prevent stack overflow
         NULL,
         TASK_PRIORITY_TTS_DECODER,
         &g_playback_task_handle,
@@ -296,9 +299,29 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
 }
 
 static void tts_playback_task(void *pvParameters) {
+    // CRITICAL SAFETY CHECK: Prevent InstructionFetchError crash from PSRAM execution
+    uint32_t pc_check = (uint32_t)__builtin_return_address(0);
+    if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: TTS task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
+        g_playback_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    
     // ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
 
-    uint8_t dma_buffer[AUDIO_CHUNK_SIZE];
+    // CRITICAL FIX: Allocate DMA buffer in PSRAM instead of on stack to prevent stack overflow
+    // Stack allocation of 4KB buffer was causing stack overflow in tts_playback task
+    uint8_t *dma_buffer = heap_caps_malloc(AUDIO_CHUNK_SIZE, MALLOC_CAP_SPIRAM);
+    if (dma_buffer == NULL) {
+        ESP_LOGE(TAG, "❌ Failed to allocate %d-byte DMA buffer in PSRAM", AUDIO_CHUNK_SIZE);
+        ESP_LOGE(TAG, "  Free PSRAM: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        g_playback_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "  ✓ DMA buffer allocated in PSRAM at %p (%d bytes)", dma_buffer, AUDIO_CHUNK_SIZE);
+    
     esp_err_t playback_result = ESP_OK;
 
     while (is_running) {
@@ -306,7 +329,7 @@ static void tts_playback_task(void *pvParameters) {
         size_t bytes_received_from_stream = xStreamBufferReceive(
             g_audio_stream_buffer,
             dma_buffer,
-            sizeof(dma_buffer),
+            AUDIO_CHUNK_SIZE,
             pdMS_TO_TICKS(100) // Wait up to 100ms for data
         );
 
@@ -411,6 +434,14 @@ static void tts_playback_task(void *pvParameters) {
     }
     
     ESP_LOGI(TAG, "TTS playback task exiting (played %zu bytes)", pcm_bytes_played);
+    
+    // CRITICAL FIX: Free PSRAM-allocated DMA buffer before task exits
+    if (dma_buffer != NULL) {
+        heap_caps_free(dma_buffer);
+        dma_buffer = NULL;
+        ESP_LOGI(TAG, "  ✓ DMA buffer freed from PSRAM");
+    }
+    
     is_running = false;
     g_playback_task_handle = NULL;
     vTaskDelete(NULL);

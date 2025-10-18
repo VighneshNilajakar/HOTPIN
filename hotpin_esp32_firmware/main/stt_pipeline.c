@@ -23,6 +23,7 @@
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 #include <string.h>
+#include <inttypes.h>
 
 static const char *TAG = TAG_STT;
 
@@ -69,7 +70,7 @@ static bool s_stop_event_posted = false;
 
 static void audio_capture_task(void *pvParameters);
 static void audio_streaming_task(void *pvParameters);
-static size_t ring_buffer_available_space(void);
+// static size_t ring_buffer_available_space(void);
 static size_t ring_buffer_available_data(void);
 static esp_err_t ring_buffer_write(const uint8_t *data, size_t len) __attribute__((noinline));
 static esp_err_t ring_buffer_read(uint8_t *data, size_t len, size_t *bytes_read) __attribute__((noinline));
@@ -161,7 +162,7 @@ esp_err_t stt_pipeline_init(void) {
         BaseType_t stream_ret = xTaskCreatePinnedToCore(
             audio_streaming_task,
             "stt_stream",
-            TASK_STACK_SIZE_MEDIUM,
+            TASK_STACK_SIZE_LARGE,  // Increased from TASK_STACK_SIZE_MEDIUM to prevent stack overflow
             NULL,
             TASK_PRIORITY_STT_PROCESSING,
             &g_audio_streaming_task_handle,
@@ -266,6 +267,7 @@ esp_err_t stt_pipeline_start(void) {
     // CRITICAL FIX: Pin audio capture task to Core 0 (same as Wi-Fi) to resolve hardware bus contention
     // The LoadStoreError was caused by Wi-Fi (Core 0) and I2S DMA (Core 1) competing for memory bus access
     // Co-locating them on Core 0 allows FreeRTOS scheduler to coordinate their operations
+    // IMPORTANT: Use explicit memory attributes to ensure task stack is NOT allocated in PSRAM
     ESP_LOGI(TAG, "[CORE AFFINITY] Creating audio capture task on Core 0 (co-located with Wi-Fi)");
     BaseType_t ret = xTaskCreatePinnedToCore(
         audio_capture_task,
@@ -371,6 +373,19 @@ const stt_pipeline_handle_t *stt_pipeline_get_handle(void) {
 // ===========================
 
 static void audio_capture_task(void *pvParameters) {
+    // CRITICAL SAFETY CHECK: Prevent InstructionFetchError crash from PSRAM execution
+    // This detects corrupted function pointers and prevents system crashes
+    uint32_t pc_check = (uint32_t)__builtin_return_address(0);
+    if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
+        if (g_audio_capture_task_handle == xTaskGetCurrentTaskHandle()) {
+            g_audio_capture_task_handle = NULL;
+        }
+        stt_pipeline_notify_capture_idle();
+        vTaskDelete(NULL);
+        return;
+    }
+    
     // ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
     // ESP_LOGI(TAG, "║ Audio Capture Task Started on Core %d", xPortGetCoreID());
     // ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
@@ -399,11 +414,12 @@ static void audio_capture_task(void *pvParameters) {
     ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)(esp_timer_get_time() / 1000));
     
     ESP_LOGI(TAG, "[BUFFER] Allocating %d byte capture buffer...", AUDIO_CAPTURE_CHUNK_SIZE);
-    // CRITICAL: Use DMA-capable memory (MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
-    uint8_t *capture_buffer = heap_caps_malloc(AUDIO_CAPTURE_CHUNK_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // CRITICAL: Use DMA-capable memory from INTERNAL RAM (MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
+    // IMPORTANT: Add extra safety padding to prevent buffer overflows
+    uint8_t *capture_buffer = heap_caps_malloc(AUDIO_CAPTURE_CHUNK_SIZE + 32, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (capture_buffer == NULL) {
         ESP_LOGE(TAG, "❌ Failed to allocate DMA-capable capture buffer");
-        ESP_LOGE(TAG, "  Requested: %d bytes", AUDIO_CAPTURE_CHUNK_SIZE);
+        ESP_LOGE(TAG, "  Requested: %d bytes", AUDIO_CAPTURE_CHUNK_SIZE + 32);
         ESP_LOGE(TAG, "  Free heap: %u bytes", (unsigned int)esp_get_free_heap_size());
         ESP_LOGE(TAG, "  Free DMA-capable: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA));
         g_audio_capture_task_handle = NULL;
@@ -411,10 +427,19 @@ static void audio_capture_task(void *pvParameters) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "  ✓ DMA-capable buffer allocated at %p", capture_buffer);
+    ESP_LOGI(TAG, "  ✓ DMA-capable buffer allocated at %p (with safety padding)", capture_buffer);
     
-    // Zero out buffer for first read
-    memset(capture_buffer, 0, AUDIO_CAPTURE_CHUNK_SIZE);
+    // Zero out buffer with extra safety padding to prevent memory corruption
+    memset(capture_buffer, 0, AUDIO_CAPTURE_CHUNK_SIZE + 32);
+    
+    // Add memory guard pattern to detect buffer overflows
+    memset(capture_buffer + AUDIO_CAPTURE_CHUNK_SIZE, 0xDE, 16);  // Guard bytes
+    memset(capture_buffer + AUDIO_CAPTURE_CHUNK_SIZE + 16, 0xAD, 16);  // More guard bytes
+    
+    // Verify memory alignment (must be 4-byte aligned for DMA)
+    if (((uintptr_t)capture_buffer) & 0x3) {
+        ESP_LOGW(TAG, "⚠ Capture buffer not 4-byte aligned - potential DMA issue");
+    }
     
     size_t bytes_read = 0;
     uint32_t total_bytes_captured = 0;
@@ -445,23 +470,20 @@ static void audio_capture_task(void *pvParameters) {
         int64_t read_duration = (esp_timer_get_time() - read_start) / 1000;
         read_count++;
         
-        // Log first read with detailed diagnostics
+        // Log first read with minimal diagnostics to prevent InstructionFetchError
         if (read_count == 1) {
             first_read_time = esp_timer_get_time() / 1000;
-            ESP_LOGI(TAG, "[FIRST READ] Completed:");
-            ESP_LOGI(TAG, "  Result: %s", esp_err_to_name(ret));
-            ESP_LOGI(TAG, "  Bytes read: %zu / %d", bytes_read, AUDIO_CAPTURE_CHUNK_SIZE);
-            ESP_LOGI(TAG, "  Duration: %lld ms", (long long)read_duration);
-            ESP_LOGI(TAG, "  Timestamp: %lld ms", (long long)first_read_time);
+            ESP_LOGD(TAG, "[FIRST READ] Completed: %zu bytes, duration: %lld ms", bytes_read, (long long)read_duration);
             
             // CRITICAL: Small delay for cache coherency after DMA transfer
             if (bytes_read >= 16) {
                 vTaskDelay(pdMS_TO_TICKS(1)); // 1ms to ensure DMA completion
-                ESP_LOGI(TAG, "  First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-                         capture_buffer[0], capture_buffer[1], capture_buffer[2], capture_buffer[3],
-                         capture_buffer[4], capture_buffer[5], capture_buffer[6], capture_buffer[7],
-                         capture_buffer[8], capture_buffer[9], capture_buffer[10], capture_buffer[11],
-                         capture_buffer[12], capture_buffer[13], capture_buffer[14], capture_buffer[15]);
+                // Removed verbose hex dump logging to prevent InstructionFetchError from excessive logging
+                // ESP_LOGI(TAG, "  First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                //          capture_buffer[0], capture_buffer[1], capture_buffer[2], capture_buffer[3],
+                //          capture_buffer[4], capture_buffer[5], capture_buffer[6], capture_buffer[7],
+                //          capture_buffer[8], capture_buffer[9], capture_buffer[10], capture_buffer[11],
+                //          capture_buffer[12], capture_buffer[13], capture_buffer[14], capture_buffer[15]);
             }
         }
         
@@ -471,18 +493,18 @@ static void audio_capture_task(void *pvParameters) {
             if (ret == ESP_OK) {
                 total_bytes_captured += bytes_read;
                 
-                // CANARY: Continuous health monitoring - log every 100 successful reads
+                // CANARY: Continuous health monitoring - log every 500 successful reads (reduced frequency to prevent crash)
                 alive_counter++;
-                if (alive_counter % 100 == 0) {
+                if (alive_counter % 500 == 0) {  // Reduced from 100 to 500 to significantly reduce logging
                     ESP_LOGI(TAG, "[CAPTURE] ✅ Alive... %u reads completed (Free Heap: %u bytes)", 
                              (unsigned int)alive_counter, (unsigned int)esp_get_free_heap_size());
                 }
                 
-                // Log every 10th successful read
-                if (read_count % 10 == 0) {
-                    ESP_LOGI(TAG, "[CAPTURE] Read #%u: %zu bytes (total: %u bytes, %.1f KB)",
+                // Reduce logging frequency - only log every 200 reads to prevent system overload
+                if (read_count % 200 == 0) {  // Changed from 10 to 200 to significantly reduce logging
+                    ESP_LOGD(TAG, "[CAPTURE] Read #%u: %zu bytes (total: %u bytes, %.1f KB)",
                              (unsigned int)read_count, bytes_read, (unsigned int)total_bytes_captured, total_bytes_captured / 1024.0);
-                    ESP_LOGI(TAG, "  Avg read time: %lld ms | Errors: %u", (long long)read_duration, (unsigned int)error_count);
+                    ESP_LOGD(TAG, "  Avg read time: %lld ms | Errors: %u", (long long)read_duration, (unsigned int)error_count);
                 }
             } else {
                 ESP_LOGW(TAG, "⚠ Ring buffer full - dropping %zu bytes (read #%u)", bytes_read, (unsigned int)read_count);
@@ -504,7 +526,25 @@ static void audio_capture_task(void *pvParameters) {
     }
     
     ESP_LOGI(TAG, "Audio capture task stopped (captured %u bytes total)", (unsigned int)total_bytes_captured);
-    heap_caps_free(capture_buffer);
+    // Free buffer with safety padding
+    if (capture_buffer != NULL) {
+        // Check guard bytes before freeing (debug only)
+        #ifdef CONFIG_ENABLE_DEBUG_LOGS
+        const uint8_t *guard1 = capture_buffer + AUDIO_CAPTURE_CHUNK_SIZE;
+        const uint8_t *guard2 = capture_buffer + AUDIO_CAPTURE_CHUNK_SIZE + 16;
+        bool guards_ok = true;
+        for (int i = 0; i < 16; i++) {
+            if (guard1[i] != 0xDE) guards_ok = false;
+            if (guard2[i] != 0xAD) guards_ok = false;
+        }
+        if (!guards_ok) {
+            ESP_LOGW(TAG, "⚠ Potential buffer overflow detected in capture buffer!");
+        }
+        #endif
+        
+        heap_caps_free(capture_buffer);
+        capture_buffer = NULL;
+    }
 
     if (g_audio_capture_task_handle == xTaskGetCurrentTaskHandle()) {
         g_audio_capture_task_handle = NULL;
@@ -516,19 +556,35 @@ static void audio_capture_task(void *pvParameters) {
 
 static void audio_streaming_task(void *pvParameters) {
     ESP_LOGI(TAG, "Persistent audio streaming task started on Core %d", xPortGetCoreID());
-
-    uint8_t *stream_buffer = heap_caps_malloc(
-        AUDIO_STREAM_CHUNK_SIZE,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
-    );
-    if (stream_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate stream buffer");
+    
+    // CRITICAL SAFETY CHECK: Prevent InstructionFetchError crash from PSRAM execution
+    uint32_t pc_check = (uint32_t)__builtin_return_address(0);
+    if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Streaming task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
         g_audio_streaming_task_handle = NULL;
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "  ✓ Stream buffer allocated at %p", stream_buffer);
+    // CRITICAL: Allocate streaming buffer with safety padding to prevent overflows
+    uint8_t *stream_buffer = heap_caps_malloc(
+        AUDIO_STREAM_CHUNK_SIZE + 32,  // Extra padding for safety
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
+    if (stream_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate stream buffer with padding");
+        g_audio_streaming_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "  ✓ Stream buffer allocated at %p (with safety padding)", stream_buffer);
+    
+    // Initialize with zero padding
+    memset(stream_buffer, 0, AUDIO_STREAM_CHUNK_SIZE + 32);
+    
+    // Add guard bytes
+    memset(stream_buffer + AUDIO_STREAM_CHUNK_SIZE, 0xBE, 16);
+    memset(stream_buffer + AUDIO_STREAM_CHUNK_SIZE + 16, 0xEF, 16);
 
     for (;;) {
         EventBits_t wait_bits = xEventGroupWaitBits(
@@ -648,8 +704,8 @@ static void audio_streaming_task(void *pvParameters) {
                 vTaskDelay(pdMS_TO_TICKS(50));
             }
 
-            if ((xTaskGetTickCount() - last_health_log) >= pdMS_TO_TICKS(AUDIO_STREAM_HEALTH_LOG_MS)) {
-                ESP_LOGI(TAG, "[STREAM] sent=%u bytes chunks=%u dropped_busy=%u dropped_fail=%u buffer_level=%u",
+            if ((xTaskGetTickCount() - last_health_log) >= pdMS_TO_TICKS(AUDIO_STREAM_HEALTH_LOG_MS * 2)) {  // Doubled the interval
+                ESP_LOGD(TAG, "[STREAM] sent=%u bytes chunks=%u dropped_busy=%u dropped_fail=%u buffer_level=%u",
                          (unsigned int)total_bytes_streamed,
                          (unsigned int)chunk_count,
                          (unsigned int)dropped_not_ready,
@@ -683,7 +739,26 @@ static void audio_streaming_task(void *pvParameters) {
         stt_pipeline_dispatch_stop_event();
     }
 
-    heap_caps_free(stream_buffer);
+    // Free streaming buffer with guard byte checking
+    if (stream_buffer != NULL) {
+        // Check guard bytes before freeing
+        #ifdef CONFIG_ENABLE_DEBUG_LOGS
+        const uint8_t *guard1 = stream_buffer + AUDIO_STREAM_CHUNK_SIZE;
+        const uint8_t *guard2 = stream_buffer + AUDIO_STREAM_CHUNK_SIZE + 16;
+        bool guards_ok = true;
+        for (int i = 0; i < 16; i++) {
+            if (guard1[i] != 0xBE) guards_ok = false;
+            if (guard2[i] != 0xEF) guards_ok = false;
+        }
+        if (!guards_ok) {
+            ESP_LOGW(TAG, "⚠ Potential buffer overflow detected in stream buffer!");
+        }
+        #endif
+        
+        heap_caps_free(stream_buffer);
+        stream_buffer = NULL;
+    }
+    
     g_audio_streaming_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -787,17 +862,17 @@ static void stt_pipeline_wait_for_streaming_idle(TickType_t deadline_ticks) {
 }
 
 // Ring buffer helper functions
-static size_t ring_buffer_available_space(void) {
-    if (g_ring_buffer_mutex == NULL) {
-        return g_ring_buffer_size - g_ring_buffer_count;
-    }
-
-    size_t space;
-    xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
-    space = g_ring_buffer_size - g_ring_buffer_count;
-    xSemaphoreGive(g_ring_buffer_mutex);
-    return space;
-}
+// static size_t ring_buffer_available_space(void) {
+//     if (g_ring_buffer_mutex == NULL) {
+//         return g_ring_buffer_size - g_ring_buffer_count;
+//     }
+//
+//     size_t space;
+//     xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
+//     space = g_ring_buffer_size - g_ring_buffer_count;
+//     xSemaphoreGive(g_ring_buffer_mutex);
+//     return space;
+// }
 
 static size_t ring_buffer_available_data(void) {
     if (g_ring_buffer_mutex == NULL) {

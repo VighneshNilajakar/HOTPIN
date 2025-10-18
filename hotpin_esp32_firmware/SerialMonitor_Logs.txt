@@ -1,7 +1,7 @@
 PS F:\Documents\HOTPIN\hotpin_esp32_firmware> idf.py monitor
 Executing action: monitor
 Serial port COM7
-Connecting....
+Connecting..................
 Detecting chip type... Unsupported detection protocol, switching and trying again...
 Connecting...
 Detecting chip type... ESP32
@@ -24,558 +24,7 @@ load:0x40080400,len:4
 load:0x40080404,len:3860
 entry 0x4008063c
 I (29) boot: ESP-IDF v5.4.2-dirty 2nd stage bootloader
-I (29) boot: compile time Oct 18 2025 17:25:27
-I (30) boot: Multicore bootloader
-I (31) boot: chip revision: v3.1
-I (34) boot.esp32: SPI Speed      : 40MHz
-I (38) boot.esp32: SPI Mode       : DIO
-I (41) boot.esp32: SPI Flash Size : 2MB
-I (45) boot: Enabling RNG early entropy source...
-I (49) boot: Partition Table:
-I (52) boot: ## Label            Usage          Type ST Offset   Length
-I (58) boot:  0 nvs              WiFi data        01 02 00009000 00004000
-I (65) boot:  1 otadata          OTA data         01 00 0000d000 00002000
-I (71) boot:  2 phy_init         RF data          01 01 0000f000 00001000
-I (78) boot:  3 factory          factory app      00 00 00010000 00180000
-I (84) boot:  4 storage          Unknown data     01 81 00190000 00070000
-I (91) boot: End of partition table
-I (94) boot: Defaulting to factory image
-I (98) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=3631ch (221980) map
-I (181) esp_image: segment 1: paddr=00046344 vaddr=3ff80000 size=0001ch (    28) load
-I (181) esp_image: segment 2: paddr=00046368 vaddr=3ffb0000 size=09cb0h ( 40112) load
-I (200) esp_image: segment 3: paddr=00050020 vaddr=400d0020 size=ba67ch (763516) map
-I (461) esp_image: segment 4: paddr=0010a6a4 vaddr=3ffb9cb0 size=08014h ( 32788) load
-I (473) esp_image: segment 5: paddr=001126c0 vaddr=40080000 size=1ae28h (110120) load
-I (532) boot: Loaded app from partition at offset 0x10000
-I (532) boot: Disabling RNG early entropy source...
-I (543) quad_psram: This chip is ESP32-D0WD
-I (543) esp_psram: Found 4MB PSRAM device
-I (543) esp_psram: Speed: 40MHz
-I (546) esp_psram: PSRAM initialized, cache is in low/high (2-core) mode.
-I (554) cpu_start: Multicore app
-I (1448) esp_psram: SPI SRAM memory test OK
-I (1456) cpu_start: Pro cpu start user code
-I (1456) cpu_start: cpu freq: 240000000 Hz
-I (1456) app_init: Application information:
-I (1459) app_init: Project name:     hotpin_esp32_firmware
-I (1465) app_init: App version:      a8c67e7-dirty
-I (1471) app_init: Compile time:     Oct 18 2025 17:25:06
-I (1477) app_init: ELF file SHA256:  513979f57...
-I (1482) app_init: ESP-IDF:          v5.4.2-dirty
-I (1488) efuse_init: Min chip rev:     v0.0
-I (1492) efuse_init: Max chip rev:     v3.99
-I (1497) efuse_init: Chip rev:         v3.1
-I (1503) heap_init: Initializing. RAM available for dynamic allocation:
-I (1510) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
-I (1516) heap_init: At 3FFC9348 len 00016CB8 (91 KiB): DRAM
-I (1522) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
-I (1528) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
-I (1535) heap_init: At 4009AE28 len 000051D8 (20 KiB): IRAM
-I (1542) esp_psram: Adding pool of 4096K of PSRAM memory to heap allocator
-I (1550) spi_flash: detected chip: generic
-I (1554) spi_flash: flash io: dio
-W (1558) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.
-I (1572) main_task: Started on CPU0
-I (1575) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
-I (1584) main_task: Calling app_main()
-I (1588) HOTPIN_MAIN: ====================================
-I (1594) HOTPIN_MAIN: HotPin ESP32-CAM AI Agent Starting
-I (1600) HOTPIN_MAIN: ====================================
-W (1606) HOTPIN_MAIN: Brownout detector disabled
-I (1611) HOTPIN_MAIN: Validating PSRAM...
-I (1616) HOTPIN_MAIN: PSRAM detected: 4194304 bytes (4.00 MB)
-I (1622) HOTPIN_MAIN: PSRAM validation passed
-I (1628) HOTPIN_MAIN: ====================================
-I (1634) HOTPIN_MAIN: System Information:
-I (1638) HOTPIN_MAIN: Chip: esp32
-I (1642) HOTPIN_MAIN: Cores: 2
-I (1646) HOTPIN_MAIN: Silicon revision: 301
-I (1651) HOTPIN_MAIN: CPU Frequency: 240 MHz
-I (1656) HOTPIN_MAIN: Flash: 2 MB external
-I (1661) HOTPIN_MAIN: Free heap: 4365156 bytes
-I (1666) HOTPIN_MAIN: PSRAM: 4194304 bytes
-I (1671) HOTPIN_MAIN: ====================================
-I (1677) HOTPIN_MAIN: Initializing NVS...
-I (1706) HOTPIN_MAIN: NVS initialized successfully
-I (1707) event_dispatcher: System event queue ready (16 entries)
-I (1708) HOTPIN_MAIN: Synchronization primitives created
-I (1714) HOTPIN_MAIN: Initializing WiFi...
-I (1723) wifi:wifi driver task: 3ffd9f40, prio:23, stack:6656, core=0
-I (1735) wifi:wifi firmware version: bea31f3
-I (1736) wifi:wifi certification version: v7.0
-I (1736) wifi:config NVS flash: enabled
-I (1739) wifi:config nano formatting: disabled
-I (1743) wifi:Init data frame dynamic rx buffer num: 32
-I (1748) wifi:Init static rx mgmt buffer num: 5
-I (1752) wifi:Init management short buffer num: 32
-I (1756) wifi:Init dynamic tx buffer num: 32
-I (1761) wifi:Init static rx buffer size: 1600
-I (1765) wifi:Init static rx buffer num: 16
-I (1769) wifi:Init dynamic rx buffer num: 32
-I (1774) wifi_init: rx ba win: 6
-I (1776) wifi_init: accept mbox: 6
-I (1781) wifi_init: tcpip mbox: 32
-I (1785) wifi_init: udp mbox: 6
-I (1788) wifi_init: tcp mbox: 6
-I (1792) wifi_init: tcp tx win: 5760
-I (1796) wifi_init: tcp rx win: 5760
-I (1801) wifi_init: tcp mss: 1440
-I (1805) wifi_init: WiFi IRAM OP enabled
-I (1809) wifi_init: WiFi RX IRAM OP enabled
-I (1816) phy_init: phy_version 4860,6b7a6e5,Feb  6 2025,14:47:07
-I (1887) wifi:mode : sta (80:f3:da:99:8c:64)
-I (1887) wifi:enable tsf
-I (1890) HOTPIN_MAIN: WiFi initialization complete, connecting to wifi...
-I (1891) HOTPIN_MAIN: Waiting for WiFi connection...
-I (1891) HOTPIN_MAIN: WiFi station started, connecting...
-I (1917) wifi:new:<11,0>, old:<1,0>, ap:<255,255>, sta:<11,0>, prof:1, snd_ch_cfg:0x0
-I (1918) wifi:state: init -> auth (0xb0)
-I (2752) wifi:state: auth -> assoc (0x0)
-I (2762) wifi:state: assoc -> run (0x10)
-I (2787) wifi:connected with wifi, aid = 2, channel 11, BW20, bssid = ee:d4:b9:ed:90:50
-I (2787) wifi:security: WPA3-SAE, phy: bgn, rssi: -59
-I (2791) wifi:pm start, type: 1
-
-I (2792) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
-I (2802) wifi:<ba-add>idx:0 (ifx:0, ee:d4:b9:ed:90:50), tid:0, ssn:0, winSize:64
-I (2809) HOTPIN_MAIN: WiFi connected to AP
-I (2819) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
-I (2819) wifi:AP's beacon interval = 102400 us, DTIM period = 2
-I (3841) esp_netif_handlers: sta ip: 10.184.66.214, mask: 255.255.255.0, gw: 10.184.66.113
-I (3842) HOTPIN_MAIN: ✅ Got IP address: 10.184.66.214
-I (3846) HOTPIN_MAIN: WiFi ready - WebSocket connection task will handle server connection
-I (6905) HOTPIN_MAIN: Initializing button handler...
-I (6905) BUTTON: Initializing button handler on GPIO 4
-I (6906) gpio: GPIO[4]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:3
-I (6915) BUTTON: Button FSM task started
-I (6920) BUTTON: Button handler initialized successfully (initial level=1, primed=1)
-I (6928) HOTPIN_MAIN: Initializing LED controller...
-I (6933) LED_CTRL: Initializing LED controller on GPIO 33
-I (6940) LED_CTRL: LED controller ready
-I (6944) LED_CTRL: LED pattern -> 2
-I (6948) HOTPIN_MAIN: Initializing WebSocket client...
-I (6954) WEBSOCKET: Initializing WebSocket client...
-I (6959) WEBSOCKET: Server URI: ws://10.184.66.58:8000/ws
-I (6966) WEBSOCKET: Authorization header configured
-I (6972) WEBSOCKET: ✅ WebSocket client initialized
-I (6977) WEBSOCKET: Status callback registered
-I (6982) HOTPIN_MAIN: WebSocket status callback registered
-I (6988) HOTPIN_MAIN: Initializing HTTP client...
-I (6993) HTTP_CLIENT: Initializing HTTP client
-I (6998) HTTP_CLIENT: Authorization token configured
-I (7004) HTTP_CLIENT: HTTP client initialized (server: http://10.184.66.58:8000)
-I (7013) HOTPIN_MAIN: Initializing STT pipeline...
-I (7019) STT: Initializing STT pipeline...
-I (7022) STT: ╔════════════════════════════════════════════════════════════
-I (7041) STT: ║ STT Ring Buffer Allocation (PSRAM)
-I (7046) STT: ╚════════════════════════════════════════════════════════════
-I (7065) STT: [MEMORY] Pre-allocation state:
-I (7069) STT:   Free internal RAM: 150799 bytes
-I (7075) STT:   Free DMA-capable: 130583 bytes
-I (7080) STT:   Free PSRAM: 4191564 bytes
-I (7084) STT: [ALLOCATION] Allocating 64 KB ring buffer in external PSRAM...
-I (7092) STT:   ✓ Ring buffer allocated at 0x3f800ab8 (PSRAM address)
-I (7100) STT:   ✓ Confirmed: Buffer is in PSRAM address range (0x3F800000-0x3FC00000)
-I (7108) STT: [MEMORY] Post-allocation state:
-I (7113) STT:   Free internal RAM: 150799 bytes
-I (7118) STT:   Free DMA-capable: 130583 bytes
-I (7124) STT:   Free PSRAM: 4126024 bytes
-I (7135) STT: [CORE AFFINITY] Creating persistent audio streaming task on Core 0
-I (7136) STT: Persistent audio streaming task started on Core 0
-I (7143) STT:   ✓ Stream buffer allocated at 0x3ffd2964
-I (7149) STT: ✅ STT pipeline initialized
-I (7154) HOTPIN_MAIN: Initializing TTS decoder...
-I (7159) TTS: Initializing TTS decoder...
-I (7164) TTS: Allocating 16384 byte PSRAM buffer for TTS stream
-I (7173) WEBSOCKET: Audio callback registered
-I (7175) TTS: ✅ TTS decoder initialized
-I (7180) HOTPIN_MAIN: Camera and audio initialization deferred to state manager
-I (7188) HOTPIN_MAIN: Creating FreeRTOS tasks...
-I (7193) HOTPIN_MAIN: State manager task created on Core 1
-I (7193) STATE_MGR: State manager task started on Core 1
-I (7200) HOTPIN_MAIN: WebSocket connection task started on Core 0
-I (7206) STATE_MGR: Priority: 10
-I (7212) HOTPIN_MAIN: 🔌 Attempting WebSocket connection (attempt 1)...
-I (7216) STATE_MGR: Starting in camera mode...
-I (7224) WEBSOCKET: Connecting to WebSocket server...
-I (7229) STATE_MGR: === TRANSITION TO CAMERA MODE ===
-I (7240) STATE_MGR: Acquiring I2S mutex...
-I (7242) websocket_client: Started
-I (7245) STATE_MGR: Audio drivers already inactive; skipping deinit
-I (7249) WEBSOCKET: WebSocket client started
-I (7256) STATE_MGR: Initializing camera...
-I (7200) HOTPIN_MAIN: WebSocket connection task created on Core 0
-I (7266) CAMERA: Initializing camera...
-I (7273) HOTPIN_MAIN: Initializing task watchdog (30s timeout)...
-I (7277) CAMERA: GPIO ISR service already active (shared)
-I (7285) HOTPIN_MAIN: State manager task added to watchdog
-I (7290) gpio: GPIO[25]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
-I (7296) HOTPIN_MAIN: ====================================
-E (7306) gpio: gpio_install_isr_service(503): GPIO isr service already installed
-I (7312) HOTPIN_MAIN: System initialization complete!
-I (7320) cam_hal: cam init ok
-I (7325) HOTPIN_MAIN: Entering camera standby mode...
-I (7330) sccb-ng: pin_sda 26 pin_scl 27
-I (7335) HOTPIN_MAIN: ====================================
-I (7339) sccb-ng: sccb_i2c_port=1
-I (7351) gpio: GPIO[32]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0
-I (7393) camera: Camera PID=0x26 VER=0x42 MIDL=0x7f MIDH=0xa2
-I (7393) camera: Detected OV2640 camera
-I (7393) camera: Detected camera at address=0x30
-I (7475) cam_hal: PSRAM DMA mode disabled
-I (7475) cam_hal: buffer_size: 32768, half_buffer_size: 4096, node_buffer_size: 2048, node_cnt: 16, total_cnt: 15
-I (7479) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
-I (7486) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
-I (7492) cam_hal: cam config ok
-I (7496) ov2640: Set PLL: clk_2x: 0, clk_div: 0, pclk_auto: 0, pclk_div: 8
-I (7578) CAMERA: Camera initialized successfully
-I (7578) STATE_MGR: I2S mutex released
-I (7578) STATE_MGR: ✅ Camera mode transition complete
-I (7578) AUDIO: ╔══════════════════════════════════════════════════════════
-I (7583) STATE_MGR: ✅ Entered CAMERA_STANDBY state
-I (7600) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
-I (7606) LED_CTRL: LED pattern -> 3
-I (7613) AUDIO: ╚══════════════════════════════════════════════════════════
-I (7635) AUDIO: [MUTEX] Creating I2S access mutex for thread safety...
-I (7642) AUDIO:   ✓ I2S access mutex created successfully
-I (7649) AUDIO: ╔══════════════════════════════════════════════════════════
-I (7667) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
-I (7674) AUDIO: ╚══════════════════════════════════════════════════════════
-I (7693) AUDIO: [DIAG] Pre-init state:
-I (7696) AUDIO:   Free heap: 4039772 bytes
-I (7701) AUDIO:   Free internal RAM: 74811 bytes
-I (7706) AUDIO:   Free DMA-capable: 54595 bytes
-I (7711) AUDIO:   Free PSRAM: 3985184 bytes
-I (7716) AUDIO:   Timestamp: 6175 ms
-I (7720) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
-I (7727) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
-I (7735) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
-I (7743) AUDIO:   DMA frame num (per desc): 1020
-I (7748) AUDIO:   DMA total samples (effective): 4080
-I (7754) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
-I (7761) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
-I (7768) AUDIO: ✅ I2S channels created (took 0 ms)
-I (7773) AUDIO:   TX handle: 0x3ffe1834 | RX handle: 0x3ffe1980
-I (7779) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
-I (7786) AUDIO:   Sample rate: 16000 Hz
-I (7790) AUDIO:   MCLK: DISABLED
-I (7794) AUDIO:   BCLK: GPIO14 (shared)
-I (7799) AUDIO:   WS:   GPIO15 (shared)
-I (7803) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
-I (7811) AUDIO: ✅ TX channel configured (took 1 ms)
-I (7815) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
-I (7821) AUDIO:   Sample rate: 16000 Hz
-I (7826) AUDIO:   MCLK: DISABLED
-I (7830) AUDIO:   BCLK: GPIO14 (shared)
-I (7834) AUDIO:   WS:   GPIO15 (shared)
-I (7839) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
-I (7847) AUDIO: ✅ RX channel configured (took 2 ms)
-I (7850) AUDIO: [STEP 4/6] Enabling TX channel...
-I (7856) AUDIO: ✅ TX channel enabled (took 0 ms)
-I (7861) AUDIO: [STEP 5/6] Enabling RX channel...
-I (7866) AUDIO: ✅ RX channel enabled (took 0 ms)
-I (7872) AUDIO: [STEP 6/6] Hardware stabilization...
-I (7877) AUDIO:   Phase 1: Initial settle (50ms)
-I (7933) AUDIO:   Phase 2: DMA verification
-I (7933) AUDIO:   ✓ DMA TX operational (128 bytes)
-I (7933) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
-I (8046) WEBSOCKET: ✅ WebSocket connected to server
-I (8047) WEBSOCKET: Sending handshake: {"session_id":"esp32-cam-hotpin"}
-I (8052) WEBSOCKET: Handshake sent successfully
-I (8054) HOTPIN_MAIN: 🎉 WebSocket status callback: CONNECTED
-I (8060) STATE_MGR: WebSocket connected
-I (8083) HOTPIN_MAIN: 📡 WebSocket connection active - monitoring link
-I (8090) AUDIO: [DIAG] Post-init state:
-I (8090) AUDIO:   Free heap: 4010436 bytes
-I (8090) AUDIO:   Free internal RAM: 45475 bytes
-I (8094) AUDIO:   Free DMA-capable: 25259 bytes
-I (8099) AUDIO:   Free PSRAM: 3985184 bytes
-I (8104) AUDIO:   Timestamp: 6562 ms
-I (8108) AUDIO:   Total init time: 203 ms
-I (8113) AUDIO: ╔══════════════════════════════════════════════════════════
-I (8130) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
-I (8136) AUDIO: ║ Driver: i2s_std (NOT legacy!)
-I (8142) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
-I (8150) AUDIO: ║ This should eliminate LoadStoreError crashes!
-I (8157) AUDIO: ╚══════════════════════════════════════════════════════════
-I (8175) AUDIO: ╔══════════════════════════════════════════════════════════
-I (8193) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
-I (8199) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
-I (8206) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
-I (8213) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
-I (8219) AUDIO: ╚══════════════════════════════════════════════════════════
-I (8265) WEBSOCKET: Received text message: {"status": "connected", "session_id": "esp32-cam-hotpin"}
-I (8266) WEBSOCKET: Server status: connected
-I (9502) AUDIO: ╔══════════════════════════════════════════════════════════
-I (9509) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
-I (9516) AUDIO: ╚══════════════════════════════════════════════════════════
-I (9534) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
-I (9541) AUDIO: ✅ RX channel disabled (took 0 ms)
-I (9546) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
-I (9553) AUDIO: ✅ TX channel disabled (took 0 ms)
-I (9558) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
-I (9615) AUDIO: [STEP 4/5] Deleting RX channel...
-I (9615) AUDIO: ✅ RX channel deleted (took 0 ms)
-I (9615) AUDIO: [STEP 5/5] Deleting TX channel...
-I (9620) AUDIO: ✅ TX channel deleted (took 0 ms)
-I (9625) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
-I (9683) AUDIO: ╔══════════════════════════════════════════════════════════
-I (9690) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
-I (9696) AUDIO: ║ Camera Can Now Initialize
-I (9701) AUDIO: ╚══════════════════════════════════════════════════════════
-I (9719) HOTPIN_MAIN: Main task exiting - system running
-I (9725) main_task: Returned from app_main()
-I (18396) STATE_MGR: Button event received: 2 in state CAMERA_STANDBY
-I (18396) STATE_MGR: Double-click detected - triggering capture sequence
-I (18399) STATE_MGR: Starting camera capture sequence
-I (18405) LED_CTRL: LED pattern -> 6
-I (18409) AUDIO: ╔══════════════════════════════════════════════════════════
-I (18427) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
-I (18434) AUDIO: ╚══════════════════════════════════════════════════════════
-I (18452) AUDIO: ╔══════════════════════════════════════════════════════════
-I (18470) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
-I (18478) AUDIO: ╚══════════════════════════════════════════════════════════
-I (18495) AUDIO: [DIAG] Pre-init state:
-I (18500) AUDIO:   Free heap: 4042796 bytes
-I (18505) AUDIO:   Free internal RAM: 77835 bytes
-I (18510) AUDIO:   Free DMA-capable: 57619 bytes
-I (18516) AUDIO:   Free PSRAM: 3985184 bytes
-I (18520) AUDIO:   Timestamp: 16979 ms
-I (18525) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
-I (18532) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
-I (18540) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
-I (18548) AUDIO:   DMA frame num (per desc): 1020
-I (18553) AUDIO:   DMA total samples (effective): 4080
-I (18559) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
-I (18566) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
-I (18573) AUDIO: ✅ I2S channels created (took 0 ms)
-I (18578) AUDIO:   TX handle: 0x3ffafc64 | RX handle: 0x3ffcacbc
-I (18585) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
-I (18591) AUDIO:   Sample rate: 16000 Hz
-I (18596) AUDIO:   MCLK: DISABLED
-I (18600) AUDIO:   BCLK: GPIO14 (shared)
-I (18605) AUDIO:   WS:   GPIO15 (shared)
-I (18609) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
-I (18616) AUDIO: ✅ TX channel configured (took 1 ms)
-I (18620) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
-I (18627) AUDIO:   Sample rate: 16000 Hz
-I (18632) AUDIO:   MCLK: DISABLED
-I (18636) AUDIO:   BCLK: GPIO14 (shared)
-I (18641) AUDIO:   WS:   GPIO15 (shared)
-I (18645) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
-I (18651) AUDIO: ✅ RX channel configured (took 0 ms)
-I (18657) AUDIO: [STEP 4/6] Enabling TX channel...
-I (18662) AUDIO: ✅ TX channel enabled (took 0 ms)
-I (18668) AUDIO: [STEP 5/6] Enabling RX channel...
-I (18673) AUDIO: ✅ RX channel enabled (took 0 ms)
-I (18679) AUDIO: [STEP 6/6] Hardware stabilization...
-I (18684) AUDIO:   Phase 1: Initial settle (50ms)
-I (18741) AUDIO:   Phase 2: DMA verification
-I (18741) AUDIO:   ✓ DMA TX operational (128 bytes)
-I (18741) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
-I (18898) AUDIO: [DIAG] Post-init state:
-I (18898) AUDIO:   Free heap: 4018356 bytes
-I (18899) AUDIO:   Free internal RAM: 53395 bytes
-I (18902) AUDIO:   Free DMA-capable: 33179 bytes
-I (18907) AUDIO:   Free PSRAM: 3985184 bytes
-I (18912) AUDIO:   Timestamp: 17371 ms
-I (18917) AUDIO:   Total init time: 201 ms
-I (18921) AUDIO: ╔══════════════════════════════════════════════════════════
-I (18939) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
-I (18946) AUDIO: ║ Driver: i2s_std (NOT legacy!)
-I (18951) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
-I (18960) AUDIO: ║ This should eliminate LoadStoreError crashes!
-I (18966) AUDIO: ╚══════════════════════════════════════════════════════════
-I (18984) AUDIO: ╔══════════════════════════════════════════════════════════
-I (19002) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
-I (19009) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
-I (19015) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
-I (19022) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
-I (19028) AUDIO: ╚══════════════════════════════════════════════════════════
-I (19378) AUDIO: ╔══════════════════════════════════════════════════════════
-I (19385) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
-I (19393) AUDIO: ╚══════════════════════════════════════════════════════════
-I (19411) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
-I (19418) AUDIO: ✅ RX channel disabled (took 0 ms)
-I (19423) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
-I (19430) AUDIO: ✅ TX channel disabled (took 0 ms)
-I (19435) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
-I (19492) AUDIO: [STEP 4/5] Deleting RX channel...
-I (19493) AUDIO: ✅ RX channel deleted (took 0 ms)
-I (19493) AUDIO: [STEP 5/5] Deleting TX channel...
-I (19498) AUDIO: ✅ TX channel deleted (took 0 ms)
-I (19503) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
-I (19561) AUDIO: ╔══════════════════════════════════════════════════════════
-I (19568) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
-I (19575) AUDIO: ║ Camera Can Now Initialize
-I (19580) AUDIO: ╚══════════════════════════════════════════════════════════
-I (19598) STATE_MGR: Capturing frame from camera
-I (19603) STATE_MGR: Frame captured: 16187 bytes
-I (19609) JSON_PROTO: Generated session ID: hotpin-998C64-18
-I (19615) STATE_MGR: Uploading image using session hotpin-998C64-18
-I (19622) HTTP_CLIENT: Uploading image: session=hotpin-998C64-18, size=16187 bytes
-I (19632) HTTP_CLIENT: POST body assembled: 16444 bytes
-I (19637) HTTP_CLIENT: Sending POST request to http://10.184.66.58:8000/image
-I (21152) HTTP_CLIENT: HTTP POST Status = 200, content_length = 199
-I (21153) HTTP_CLIENT: Image uploaded successfully
-I (21154) HTTP_CLIENT: Server response: {"status":"success","message":"Image received successfully","session":"hotpin-998C64-18","filename":"image.jpg","size_bytes":16187,"saved_path":"captured_images/hotpin-998C64-18_20251018_172653.jpg"}
-I (21178) STATE_MGR: Image uploaded successfully
-I (21181) LED_CTRL: LED pattern -> 3
-I (21185) STATE_MGR: Camera capture sequence complete
-I (21201) STATE_MGR: Capture complete event: success=1 (ESP_OK)
-I (28347) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY
-I (28347) BUTTON: Single click confirmed
-I (28347) STATE_MGR: Single click - mode toggle requested
-I (28354) STATE_MGR: Switching: Camera → Voice (count: 1)
-I (28360) STATE_MGR: === TRANSITION TO VOICE MODE ===
-I (28366) STATE_MGR: Stopping camera...
-I (28370) STATE_MGR: ╔══════════════════════════════════════════════════
-I (28386) STATE_MGR: ║ STEP 2: Acquiring I2S configuration mutex
-I (28393) STATE_MGR: ╚══════════════════════════════════════════════════
-I (28409) STATE_MGR:   Timeout: 5000 ms
-I (28414) STATE_MGR:   Timestamp: 26873 ms
-I (28419) STATE_MGR:   ✓ Mutex acquired (took 0 ms)
-I (28424) STATE_MGR: ╔══════════════════════════════════════════════════
-I (28441) STATE_MGR: ║ STEP 3: Deinitializing camera hardware
-I (28447) STATE_MGR: ╚══════════════════════════════════════════════════
-I (28464) STATE_MGR:   Free heap before: 4043984 bytes
-I (28469) STATE_MGR:   Free PSRAM before: 3985184 bytes
-I (28475) CAMERA: Deinitializing camera...
-I (28481) CAMERA: Camera deinitialized
-I (28484) STATE_MGR:   ✓ Camera deinitialized (took 9 ms)
-I (28491) STATE_MGR:   Free heap after: 4206260 bytes
-I (28496) STATE_MGR:   Free PSRAM after: 4109500 bytes
-I (28502) STATE_MGR: ╔══════════════════════════════════════════════════
-I (28518) STATE_MGR: ║ HARDWARE STABILIZATION - CRITICAL
-I (28525) STATE_MGR: ╚══════════════════════════════════════════════════
-I (28541) STATE_MGR:   Phase 1: Initial settle (100ms) - Free camera interrupts
-I (28649) STATE_MGR:   Phase 2: GPIO matrix settle (100ms) - Reconfigure pins
-I (28749) STATE_MGR:   Phase 3: Final settle (50ms) - Stabilize state
-I (28799) STATE_MGR:   ✓ Total stabilization: 250ms
-I (28799) STATE_MGR:   Timestamp: 27258 ms
-I (28799) STATE_MGR: ╔══════════════════════════════════════════════════
-I (28815) STATE_MGR: ║ STEP 4: Initializing I2S audio drivers
-I (28822) STATE_MGR: ╚══════════════════════════════════════════════════
-I (28838) STATE_MGR:   Free heap before: 4206260 bytes
-I (28844) AUDIO: ╔══════════════════════════════════════════════════════════
-I (28862) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
-I (28869) AUDIO: ╚══════════════════════════════════════════════════════════
-I (28887) AUDIO: ╔══════════════════════════════════════════════════════════
-I (28905) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
-I (28912) AUDIO: ╚══════════════════════════════════════════════════════════
-I (28930) AUDIO: [DIAG] Pre-init state:
-I (28934) AUDIO:   Free heap: 4206260 bytes
-I (28939) AUDIO:   Free internal RAM: 117111 bytes
-I (28945) AUDIO:   Free DMA-capable: 96895 bytes
-I (28950) AUDIO:   Free PSRAM: 4109500 bytes
-I (28955) AUDIO:   Timestamp: 27414 ms
-I (28959) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
-I (28966) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
-I (28974) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
-I (28982) AUDIO:   DMA frame num (per desc): 1020
-I (28988) AUDIO:   DMA total samples (effective): 4080
-I (28994) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
-I (29001) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
-I (29007) AUDIO: ✅ I2S channels created (took 0 ms)
-I (29012) AUDIO:   TX handle: 0x3ffafc3c | RX handle: 0x3ffcad00
-I (29019) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
-I (29026) AUDIO:   Sample rate: 16000 Hz
-I (29030) AUDIO:   MCLK: DISABLED
-I (29034) AUDIO:   BCLK: GPIO14 (shared)
-I (29039) AUDIO:   WS:   GPIO15 (shared)
-I (29044) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
-I (29050) AUDIO: ✅ TX channel configured (took 1 ms)
-I (29055) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
-I (29062) AUDIO:   Sample rate: 16000 Hz
-I (29066) AUDIO:   MCLK: DISABLED
-I (29070) AUDIO:   BCLK: GPIO14 (shared)
-I (29075) AUDIO:   WS:   GPIO15 (shared)
-I (29080) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
-I (29086) AUDIO: ✅ RX channel configured (took 0 ms)
-I (29091) AUDIO: [STEP 4/6] Enabling TX channel...
-I (29097) AUDIO: ✅ TX channel enabled (took 0 ms)
-I (29102) AUDIO: [STEP 5/6] Enabling RX channel...
-I (29108) AUDIO: ✅ RX channel enabled (took 0 ms)
-I (29113) AUDIO: [STEP 6/6] Hardware stabilization...
-I (29119) AUDIO:   Phase 1: Initial settle (50ms)
-I (29174) AUDIO:   Phase 2: DMA verification
-I (29174) AUDIO:   ✓ DMA TX operational (128 bytes)
-I (29175) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
-I (29332) AUDIO: [DIAG] Post-init state:
-I (29332) AUDIO:   Free heap: 4180268 bytes
-I (29333) AUDIO:   Free internal RAM: 91119 bytes
-I (29336) AUDIO:   Free DMA-capable: 70903 bytes
-I (29341) AUDIO:   Free PSRAM: 4109500 bytes
-I (29346) AUDIO:   Timestamp: 27805 ms
-I (29351) AUDIO:   Total init time: 201 ms
-I (29355) AUDIO: ╔══════════════════════════════════════════════════════════
-I (29373) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
-I (29380) AUDIO: ║ Driver: i2s_std (NOT legacy!)
-I (29385) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
-I (29394) AUDIO: ║ This should eliminate LoadStoreError crashes!
-I (29400) AUDIO: ╚══════════════════════════════════════════════════════════
-I (29418) AUDIO: ╔══════════════════════════════════════════════════════════
-I (29436) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
-I (29443) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
-I (29449) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
-I (29456) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
-I (29462) AUDIO: ╚══════════════════════════════════════════════════════════
-I (29480) STATE_MGR:   ✓ Audio initialized (took 636 ms)
-I (29486) STATE_MGR:   Free heap after: 4180268 bytes
-I (29492) STATE_MGR: ╔══════════════════════════════════════════════════
-I (29508) STATE_MGR: ║ STEP 5: I2S mutex released
-I (29514) STATE_MGR: ║ Total transition time: 895 ms
-I (29520) STATE_MGR: ╚══════════════════════════════════════════════════
-I (29536) STATE_MGR: ╔══════════════════════════════════════════════════
-I (29552) STATE_MGR: ║ STEP 6: Starting STT/TTS pipelines
-I (29559) STATE_MGR: ╚══════════════════════════════════════════════════
-I (29575) STT: Starting STT pipeline...
-I (29579) STT: [CORE AFFINITY] Creating audio capture task on Core 0 (co-located with Wi-Fi)
-I (29588) STT: ✅ STT pipeline started
-I (29588) STT: [STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...
-I (29600) STT:   Current time: 28059 ms
-I (29589) STT: Audio streaming session activated
-I (29610) STT: Starting audio streaming to server...
-I (29604) STT:   Free heap: 4171716 bytes
-I (29643) TTS: Starting TTS decoder...
-I (29643) TTS: Initializing TTS decoder...
-W (29644) TTS: TTS decoder already initialized
-I (29647) TTS: [CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU)
-I (29654) TTS: ✅ TTS decoder started
-Guru Meditation Error: Core  0 panic'ed (InstructionFetchError). Exception was unhandled.
-
-Core  0 register dump:
-PC      : 0x3f424e38  PS      : 0x00050033  A0      : 0x3f424e38  A1      : 0x3fffedf0
-A2      : 0x3ffb093c  A3      : 0xffffffff  A4      : 0x3ffe6600  A5      : 0x00060323
-A6      : 0x00000000  A7      : 0x0000abab  A8      : 0x00000000  A9      : 0x3fffee90
-A10     : 0x00000000  A11     : 0x00000000  A12     : 0x00000000  A13     : 0x00000000
-A14     : 0x400844f2  A15     : 0x00060323  SAR     : 0x0000002e  EXCCAUSE: 0x00000002
---- 0x400844f2: _xt_lowint1 at C:/Espressif/frameworks/esp-idf-v5.4.2/components/xtensa/xtensa_vectors.S:1233
-EXCVADDR: 0x3f424e38  LBEG    : 0x00000000  LEND    : 0x00000000  LCOUNT  : 0xb33fffff
-
-
-Backtrace: 0x3f424e35:0x3fffedf0 |<-CORRUPTED
-
-
-
-
-ELF file SHA256: 513979f57
-
-Rebooting...
-ets Jul 29 2019 12:21:46
-
-rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
-configsip: 0, SPIWP:0xee
-clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
-mode:DIO, clock div:2
-load:0x3fff0030,len:6276
-load:0x40078000,len:15736
-load:0x40080400,len:4
---- 0x40080400: _init at ??:?
-load:0x40080404,len:3860
-entry 0x4008063c
-I (29) boot: ESP-IDF v5.4.2-dirty 2nd stage bootloader
-I (29) boot: compile time Oct 18 2025 17:25:27
+I (29) boot: compile time Oct 18 2025 22:59:34
 I (29) boot: Multicore bootloader
 I (31) boot: chip revision: v3.1
 I (34) boot.esp32: SPI Speed      : 40MHz
@@ -591,95 +40,1089 @@ I (78) boot:  3 factory          factory app      00 00 00010000 00180000
 I (84) boot:  4 storage          Unknown data     01 81 00190000 00070000
 I (91) boot: End of partition table
 I (94) boot: Defaulting to factory image
-I (98) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=3631ch (221980) map
-I (181) esp_image: segment 1: paddr=00046344 vaddr=3ff80000 size=0001ch (    28) load
-I (181) esp_image: segment 2: paddr=00046368 vaddr=3ffb0000 size=09cb0h ( 40112) load
-I (200) esp_image: segment 3: paddr=00050020 vaddr=400d0020 size=ba67ch (763516) map
-I (461) esp_image: segment 4: paddr=0010a6a4 vaddr=3ffb9cb0 size=08014h ( 32788) load
-I (473) esp_image: segment 5: paddr=001126c0 vaddr=40080000 size=1ae28h (110120) load
-I (532) boot: Loaded app from partition at offset 0x10000
-I (532) boot: Disabling RNG early entropy source...
+I (98) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=3657ch (222588) map
+I (181) esp_image: segment 1: paddr=000465a4 vaddr=3ff80000 size=0001ch (    28) load
+I (182) esp_image: segment 2: paddr=000465c8 vaddr=3ffb0000 size=09a50h ( 39504) load
+I (200) esp_image: segment 3: paddr=00050020 vaddr=400d0020 size=ba740h (763712) map
+I (461) esp_image: segment 4: paddr=0010a768 vaddr=3ffb9a50 size=08274h ( 33396) load
+I (473) esp_image: segment 5: paddr=001129e4 vaddr=40080000 size=1ae28h (110120) load
+I (533) boot: Loaded app from partition at offset 0x10000
+I (533) boot: Disabling RNG early entropy source...
 I (543) quad_psram: This chip is ESP32-D0WD
 I (543) esp_psram: Found 4MB PSRAM device
 I (543) esp_psram: Speed: 40MHz
-I (546) esp_psram: PSRAM initialized, cache is in low/high (2-core) mode.
+I (547) esp_psram: PSRAM initialized, cache is in low/high (2-core) mode.
 I (554) cpu_start: Multicore app
-I (1448) esp_psram: SPI SRAM memory test OK
-I (1456) cpu_start: Pro cpu start user code
-I (1456) cpu_start: cpu freq: 240000000 Hz
-I (1456) app_init: Application information:
-I (1459) app_init: Project name:     hotpin_esp32_firmware
-I (1465) app_init: App version:      a8c67e7-dirty
-I (1471) app_init: Compile time:     Oct 18 2025 17:25:06
-I (1477) app_init: ELF file SHA256:  513979f57...
-I (1482) app_init: ESP-IDF:          v5.4.2-dirty
-I (1488) efuse_init: Min chip rev:     v0.0
-I (1492) efuse_init: Max chip rev:     v3.99
-I (1497) efuse_init: Chip rev:         v3.1
-I (1503) heap_init: Initializing. RAM available for dynamic allocation:
-I (1510) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
-I (1516) heap_init: At 3FFC9348 len 00016CB8 (91 KiB): DRAM
-I (1522) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
-I (1528) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
-I (1535) heap_init: At 4009AE28 len 000051D8 (20 KiB): IRAM
-I (1542) esp_psram: Adding pool of 4096K of PSRAM memory to heap allocator
-I (1549) spi_flash: detected chip: generic
-I (1553) spi_flash: flash io: dio
-W (1557) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.
-I (1572) main_task: Started on CPU0
-I (1575) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
-I (1584) main_task: Calling app_main()
-I (1588) HOTPIN_MAIN: ====================================
-I (1594) HOTPIN_MAIN: HotPin ESP32-CAM AI Agent Starting
-I (1600) HOTPIN_MAIN: ====================================
-W (1606) HOTPIN_MAIN: Brownout detector disabled
-I (1611) HOTPIN_MAIN: Validating PSRAM...
-I (1616) HOTPIN_MAIN: PSRAM detected: 4194304 bytes (4.00 MB)
-I (1622) HOTPIN_MAIN: PSRAM validation passed
-I (1628) HOTPIN_MAIN: ====================================
-I (1634) HOTPIN_MAIN: System Information:
-I (1638) HOTPIN_MAIN: Chip: esp32
-I (1642) HOTPIN_MAIN: Cores: 2
-I (1646) HOTPIN_MAIN: Silicon revision: 301
-I (1651) HOTPIN_MAIN: CPU Frequency: 240 MHz
-I (1656) HOTPIN_MAIN: Flash: 2 MB external
-I (1661) HOTPIN_MAIN: Free heap: 4365156 bytes
-I (1666) HOTPIN_MAIN: PSRAM: 4194304 bytes
-I (1671) HOTPIN_MAIN: ====================================
-I (1677) HOTPIN_MAIN: Initializing NVS...
-I (1706) HOTPIN_MAIN: NVS initialized successfully
-I (1707) event_dispatcher: System event queue ready (16 entries)
+I (1449) esp_psram: SPI SRAM memory test OK
+I (1457) cpu_start: Pro cpu start user code
+I (1457) cpu_start: cpu freq: 240000000 Hz
+I (1457) app_init: Application information:
+I (1460) app_init: Project name:     hotpin_esp32_firmware
+I (1466) app_init: App version:      4b36e74-dirty
+I (1472) app_init: Compile time:     Oct 18 2025 22:59:22
+I (1478) app_init: ELF file SHA256:  829c4df1c...
+I (1483) app_init: ESP-IDF:          v5.4.2-dirty
+I (1489) efuse_init: Min chip rev:     v0.0
+I (1494) efuse_init: Max chip rev:     v3.99
+I (1499) efuse_init: Chip rev:         v3.1
+I (1504) heap_init: Initializing. RAM available for dynamic allocation:
+I (1511) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM
+I (1517) heap_init: At 3FFC9348 len 00016CB8 (91 KiB): DRAM
+I (1523) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM
+I (1530) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM
+I (1536) heap_init: At 4009AE28 len 000051D8 (20 KiB): IRAM
+I (1543) esp_psram: Adding pool of 4096K of PSRAM memory to heap allocator
+I (1551) spi_flash: detected chip: generic
+I (1555) spi_flash: flash io: dio
+W (1559) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.
+I (1573) main_task: Started on CPU0
+I (1576) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (1585) main_task: Calling app_main()
+I (1589) HOTPIN_MAIN: ====================================
+I (1595) HOTPIN_MAIN: HotPin ESP32-CAM AI Agent Starting
+I (1601) HOTPIN_MAIN: ====================================
+W (1607) HOTPIN_MAIN: Brownout detector disabled
+I (1612) HOTPIN_MAIN: Validating PSRAM...
+I (1617) HOTPIN_MAIN: PSRAM detected: 4194304 bytes (4.00 MB)
+I (1624) HOTPIN_MAIN: PSRAM validation passed
+I (1629) HOTPIN_MAIN: ====================================
+I (1635) HOTPIN_MAIN: System Information:
+I (1639) HOTPIN_MAIN: Chip: esp32
+I (1643) HOTPIN_MAIN: Cores: 2
+I (1647) HOTPIN_MAIN: Silicon revision: 301
+I (1652) HOTPIN_MAIN: CPU Frequency: 240 MHz
+I (1657) HOTPIN_MAIN: Flash: 2 MB external
+I (1662) HOTPIN_MAIN: Free heap: 4365156 bytes
+I (1667) HOTPIN_MAIN: PSRAM: 4194304 bytes
+I (1672) HOTPIN_MAIN: ====================================
+I (1678) HOTPIN_MAIN: Initializing NVS...
+I (1707) HOTPIN_MAIN: NVS initialized successfully
+I (1708) event_dispatcher: System event queue ready (16 entries)
 I (1708) HOTPIN_MAIN: Synchronization primitives created
 I (1714) HOTPIN_MAIN: Initializing WiFi...
 I (1723) wifi:wifi driver task: 3ffd9f40, prio:23, stack:6656, core=0
-I (1735) wifi:wifi firmware version: bea31f3
+I (1736) wifi:wifi firmware version: bea31f3
 I (1736) wifi:wifi certification version: v7.0
 I (1736) wifi:config NVS flash: enabled
-I (1739) wifi:config nano formatting: disabled
-I (1743) wifi:Init data frame dynamic rx buffer num: 32
-I (1748) wifi:Init static rx mgmt buffer num: 5
-I (1752) wifi:Init management short buffer num: 32
-I (1756) wifi:Init dynamic tx buffer num: 32
-I (1761) wifi:Init static rx buffer size: 1600
-I (1765) wifi:Init static rx buffer num: 16
-I (1769) wifi:Init dynamic rx buffer num: 32
-I (1774) wifi_init: rx ba win: 6
-I (1776) wifi_init: accept mbox: 6
-I (1781) wifi_init: tcpip mbox: 32
-I (1785) wifi_init: udp mbox: 6
-I (1788) wifi_init: tcp mbox: 6
-I (1792) wifi_init: tcp tx win: 5760
-I (1796) wifi_init: tcp rx win: 5760
-I (1801) wifi_init: tcp mss: 1440
-I (1805) wifi_init: WiFi IRAM OP enabled
-I (1809) wifi_init: WiFi RX IRAM OP enabled
-I (1816) phy_init: phy_version 4860,6b7a6e5,Feb  6 2025,14:47:07
-I (1886) wifi:mode : sta (80:f3:da:99:8c:64)
-I (1887) wifi:enable tsf
-I (1890) HOTPIN_MAIN: WiFi initialization complete, connecting to wifi...
-I (1890) HOTPIN_MAIN: Waiting for WiFi connection...
-I (1891) HOTPIN_MAIN: WiFi station started, connecting...
-I (1913) wifi:new:<11,0>, old:<1,0>, ap:<255,255>, sta:<11,0>, prof:1, snd_ch_cfg:0x0
-I (1915) wifi:state: init -> auth (0xb0)
-I (2748) wifi:state: auth -> assoc (0x0)
-I (2756) wifi:Association refused temporarily time 1100, comeback time 1200 (TUs)
+I (1737) wifi:config nano formatting: disabled
+I (1742) wifi:Init data frame dynamic rx buffer num: 32
+I (1746) wifi:Init static rx mgmt buffer num: 5
+I (1750) wifi:Init management short buffer num: 32
+I (1755) wifi:Init dynamic tx buffer num: 32
+I (1759) wifi:Init static rx buffer size: 1600
+I (1763) wifi:Init static rx buffer num: 16
+I (1767) wifi:Init dynamic rx buffer num: 32
+I (1772) wifi_init: rx ba win: 6
+I (1775) wifi_init: accept mbox: 6
+I (1779) wifi_init: tcpip mbox: 32
+I (1783) wifi_init: udp mbox: 6
+I (1787) wifi_init: tcp mbox: 6
+I (1791) wifi_init: tcp tx win: 5760
+I (1795) wifi_init: tcp rx win: 5760
+I (1799) wifi_init: tcp mss: 1440
+I (1803) wifi_init: WiFi IRAM OP enabled
+I (1808) wifi_init: WiFi RX IRAM OP enabled
+I (1814) phy_init: phy_version 4860,6b7a6e5,Feb  6 2025,14:47:07
+I (1885) wifi:mode : sta (80:f3:da:99:8c:64)
+I (1886) wifi:enable tsf
+I (1888) HOTPIN_MAIN: WiFi initialization complete, connecting to wifi...
+I (1889) HOTPIN_MAIN: Waiting for WiFi connection...
+I (1889) HOTPIN_MAIN: WiFi station started, connecting...
+I (1914) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1, snd_ch_cfg:0x0
+I (1916) wifi:state: init -> auth (0xb0)
+I (3081) wifi:state: auth -> assoc (0x0)
+I (3092) wifi:state: assoc -> run (0x10)
+I (3119) wifi:connected with wifi, aid = 2, channel 6, BW20, bssid = ee:d4:b9:ed:90:50
+I (3120) wifi:security: WPA3-SAE, phy: bgn, rssi: -69
+I (3124) wifi:pm start, type: 1
+
+I (3124) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (3135) wifi:<ba-add>idx:0 (ifx:0, ee:d4:b9:ed:90:50), tid:0, ssn:0, winSize:64
+I (3142) HOTPIN_MAIN: WiFi connected to AP
+I (3205) wifi:dp: 2, bi: 102400, li: 4, scale listen interval from 307200 us to 409600 us
+I (3205) wifi:AP's beacon interval = 102400 us, DTIM period = 2
+I (4176) esp_netif_handlers: sta ip: 10.184.66.214, mask: 255.255.255.0, gw: 10.184.66.113
+I (4177) HOTPIN_MAIN: ✅ Got IP address: 10.184.66.214
+I (4181) HOTPIN_MAIN: WiFi ready - WebSocket connection task will handle server connection
+I (6903) HOTPIN_MAIN: Initializing button handler...
+I (6903) BUTTON: Initializing button handler on GPIO 4
+I (6904) gpio: GPIO[4]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:3
+I (6913) BUTTON: Button FSM task started
+I (6918) BUTTON: Button handler initialized successfully (initial level=1, primed=1)
+I (6926) HOTPIN_MAIN: Initializing LED controller...
+I (6931) LED_CTRL: Initializing LED controller on GPIO 33
+I (6938) LED_CTRL: LED controller ready
+I (6942) LED_CTRL: LED pattern -> 2
+I (6946) HOTPIN_MAIN: Initializing WebSocket client...
+I (6952) WEBSOCKET: Initializing WebSocket client...
+I (6957) WEBSOCKET: Server URI: ws://10.184.66.58:8000/ws
+I (6964) WEBSOCKET: Authorization header configured
+I (6970) WEBSOCKET: ✅ WebSocket client initialized
+I (6975) WEBSOCKET: Status callback registered
+I (6980) HOTPIN_MAIN: WebSocket status callback registered
+I (6986) HOTPIN_MAIN: Initializing HTTP client...
+I (6991) HTTP_CLIENT: Initializing HTTP client
+I (6997) HTTP_CLIENT: Authorization token configured
+I (7002) HTTP_CLIENT: HTTP client initialized (server: http://10.184.66.58:8000)
+I (7010) HOTPIN_MAIN: Initializing STT pipeline...
+I (7016) STT: Initializing STT pipeline...
+I (7020) STT: ╔════════════════════════════════════════════════════════════
+I (7039) STT: ║ STT Ring Buffer Allocation (PSRAM)
+I (7044) STT: ╚════════════════════════════════════════════════════════════
+I (7063) STT: [MEMORY] Pre-allocation state:
+I (7067) STT:   Free internal RAM: 150799 bytes
+I (7073) STT:   Free DMA-capable: 130583 bytes
+I (7078) STT:   Free PSRAM: 4191564 bytes
+I (7083) STT: [ALLOCATION] Allocating 64 KB ring buffer in external PSRAM...
+I (7090) STT:   ✓ Ring buffer allocated at 0x3f800ab8 (PSRAM address)
+I (7098) STT:   ✓ Confirmed: Buffer is in PSRAM address range (0x3F800000-0x3FC00000)
+I (7106) STT: [MEMORY] Post-allocation state:
+I (7111) STT:   Free internal RAM: 150799 bytes
+I (7116) STT:   Free DMA-capable: 130583 bytes
+I (7122) STT:   Free PSRAM: 4126024 bytes
+I (7133) STT: [CORE AFFINITY] Creating persistent audio streaming task on Core 0
+I (7134) STT: Persistent audio streaming task started on Core 0
+I (7141) STT:   ✓ Stream buffer allocated at 0x3ffd3964 (with safety padding)
+I (7149) STT: ✅ STT pipeline initialized
+I (7154) HOTPIN_MAIN: Initializing TTS decoder...
+I (7159) TTS: Initializing TTS decoder...
+I (7164) TTS: Allocating 16384 byte PSRAM buffer for TTS stream
+I (7173) WEBSOCKET: Audio callback registered
+I (7175) TTS: ✅ TTS decoder initialized
+I (7180) HOTPIN_MAIN: Camera and audio initialization deferred to state manager
+I (7188) HOTPIN_MAIN: Creating FreeRTOS tasks...
+I (7195) HOTPIN_MAIN: State manager task created on Core 1
+I (7195) STATE_MGR: State manager task started on Core 1
+I (7201) HOTPIN_MAIN: WebSocket connection task started on Core 0
+I (7206) STATE_MGR: Priority: 10
+I (7212) HOTPIN_MAIN: 🔌 Attempting WebSocket connection (attempt 1)...
+I (7216) STATE_MGR: Starting in camera mode...
+I (7224) WEBSOCKET: Connecting to WebSocket server...
+I (7229) STATE_MGR: === TRANSITION TO CAMERA MODE ===
+I (7240) STATE_MGR: Acquiring I2S mutex...
+I (7242) websocket_client: Started
+I (7245) STATE_MGR: Audio drivers already inactive; skipping deinit
+I (7249) WEBSOCKET: WebSocket client started
+I (7256) STATE_MGR: Initializing camera...
+I (7201) HOTPIN_MAIN: WebSocket connection task created on Core 0
+I (7266) CAMERA: Initializing camera...
+I (7273) HOTPIN_MAIN: Initializing task watchdog (30s timeout)...
+I (7277) CAMERA: GPIO ISR service already active (shared)
+I (7284) HOTPIN_MAIN: State manager task added to watchdog
+I (7290) gpio: GPIO[25]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
+I (7296) HOTPIN_MAIN: ====================================
+E (7306) gpio: gpio_install_isr_service(503): GPIO isr service already installed
+I (7312) HOTPIN_MAIN: System initialization complete!
+I (7320) cam_hal: cam init ok
+I (7325) HOTPIN_MAIN: Entering camera standby mode...
+I (7330) sccb-ng: pin_sda 26 pin_scl 27
+I (7335) HOTPIN_MAIN: ====================================
+I (7339) sccb-ng: sccb_i2c_port=1
+I (7350) gpio: GPIO[32]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0
+I (7393) camera: Camera PID=0x26 VER=0x42 MIDL=0x7f MIDH=0xa2
+I (7393) camera: Detected OV2640 camera
+I (7393) camera: Detected camera at address=0x30
+I (7474) cam_hal: PSRAM DMA mode disabled
+I (7474) cam_hal: buffer_size: 32768, half_buffer_size: 4096, node_buffer_size: 2048, node_cnt: 16, total_cnt: 15
+I (7478) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (7485) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (7491) cam_hal: cam config ok
+I (7495) ov2640: Set PLL: clk_2x: 0, clk_div: 0, pclk_auto: 0, pclk_div: 8
+I (7577) CAMERA: Camera initialized successfully
+I (7577) STATE_MGR: I2S mutex released
+I (7577) STATE_MGR: ✅ Camera mode transition complete
+I (7577) AUDIO: ╔══════════════════════════════════════════════════════════
+I (7582) STATE_MGR: ✅ Entered CAMERA_STANDBY state
+I (7599) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (7612) AUDIO: ╚══════════════════════════════════════════════════════════
+I (7605) LED_CTRL: LED pattern -> 3
+I (7631) AUDIO: [MUTEX] Creating I2S access mutex for thread safety...
+I (7641) AUDIO:   ✓ I2S access mutex created successfully
+I (7648) AUDIO: ╔══════════════════════════════════════════════════════════
+I (7652) WEBSOCKET: ✅ WebSocket connected to server
+I (7666) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (7672) WEBSOCKET: Sending handshake: {"session_id":"esp32-cam-hotpin"}
+I (7678) AUDIO: ╚══════════════════════════════════════════════════════════
+I (7690) WEBSOCKET: Handshake sent successfully
+I (7709) HOTPIN_MAIN: 🎉 WebSocket status callback: CONNECTED
+I (7709) STATE_MGR: WebSocket connected
+I (7704) AUDIO: [DIAG] Pre-init state:
+I (7724) AUDIO:   Free heap: 4032032 bytes
+I (7729) AUDIO:   Free internal RAM: 67103 bytes
+I (7735) AUDIO:   Free DMA-capable: 46887 bytes
+I (7740) AUDIO:   Free PSRAM: 3985184 bytes
+I (7745) AUDIO:   Timestamp: 6202 ms
+I (7749) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (7756) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (7763) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (7772) AUDIO:   DMA frame num (per desc): 1020
+I (7777) AUDIO:   DMA total samples (effective): 4080
+I (7783) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (7790) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (7796) AUDIO: ✅ I2S channels created (took 0 ms)
+I (7801) AUDIO:   TX handle: 0x3ffe19dc | RX handle: 0x3fff4b3c
+I (7809) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (7815) AUDIO:   Sample rate: 16000 Hz
+I (7819) AUDIO:   MCLK: DISABLED
+I (7823) AUDIO:   BCLK: GPIO14 (shared)
+I (7827) AUDIO:   WS:   GPIO15 (shared)
+I (7832) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (7832) WEBSOCKET: Received text message: {"status": "connected", "session_id": "esp32-cam-hotpin"}
+I (7839) AUDIO: ✅ TX channel configured (took 1 ms)
+I (7848) WEBSOCKET: Server status: connected
+I (7853) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (7865) AUDIO:   Sample rate: 16000 Hz
+I (7869) AUDIO:   MCLK: DISABLED
+I (7873) AUDIO:   BCLK: GPIO14 (shared)
+I (7878) AUDIO:   WS:   GPIO15 (shared)
+I (7882) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (7888) AUDIO: ✅ RX channel configured (took 0 ms)
+I (7893) AUDIO: [STEP 4/6] Enabling TX channel...
+I (7899) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (7904) AUDIO: [STEP 5/6] Enabling RX channel...
+I (7910) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (7915) AUDIO: [STEP 6/6] Hardware stabilization...
+I (7921) AUDIO:   Phase 1: Initial settle (50ms)
+I (7926) HOTPIN_MAIN: 📡 WebSocket connection active - monitoring link
+I (7976) AUDIO:   Phase 2: DMA verification
+I (7976) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (7976) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (8132) AUDIO: [DIAG] Post-init state:
+I (8132) AUDIO:   Free heap: 4009200 bytes
+I (8132) AUDIO:   Free internal RAM: 44239 bytes
+I (8135) AUDIO:   Free DMA-capable: 24023 bytes
+I (8141) AUDIO:   Free PSRAM: 3985184 bytes
+I (8146) AUDIO:   Timestamp: 6603 ms
+I (8150) AUDIO:   Total init time: 201 ms
+I (8154) AUDIO: ╔══════════════════════════════════════════════════════════
+I (8172) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+I (8178) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (8184) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (8192) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (8199) AUDIO: ╚══════════════════════════════════════════════════════════
+I (8217) AUDIO: ╔══════════════════════════════════════════════════════════
+I (8235) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (8241) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+I (8248) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (8254) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (8260) AUDIO: ╚══════════════════════════════════════════════════════════
+I (9545) AUDIO: ╔══════════════════════════════════════════════════════════
+I (9552) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (9559) AUDIO: ╚══════════════════════════════════════════════════════════
+I (9577) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (9584) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (9589) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (9596) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (9601) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (9658) AUDIO: [STEP 4/5] Deleting RX channel...
+I (9658) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (9658) AUDIO: [STEP 5/5] Deleting TX channel...
+I (9663) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (9668) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (9726) AUDIO: ╔══════════════════════════════════════════════════════════
+I (9732) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (9739) AUDIO: ║ Camera Can Now Initialize
+I (9744) AUDIO: ╚══════════════════════════════════════════════════════════
+I (9762) HOTPIN_MAIN: Main task exiting - system running
+I (9768) main_task: Returned from app_main()
+I (12003) BUTTON: Single click confirmed
+I (12003) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY
+I (12004) STATE_MGR: Single click - mode toggle requested
+I (12010) STATE_MGR: Switching: Camera → Voice (count: 1)
+I (12016) STATE_MGR: === TRANSITION TO VOICE MODE ===
+I (12022) STATE_MGR: Stopping camera...
+I (12026) STATE_MGR: ╔══════════════════════════════════════════════════
+I (12042) STATE_MGR: ║ STEP 2: Acquiring I2S configuration mutex
+I (12049) STATE_MGR: ╚══════════════════════════════════════════════════
+I (12066) STATE_MGR:   Timeout: 5000 ms
+I (12070) STATE_MGR:   Timestamp: 10528 ms
+I (12075) STATE_MGR:   ✓ Mutex acquired (took 0 ms)
+I (12081) STATE_MGR: ╔══════════════════════════════════════════════════
+I (12097) STATE_MGR: ║ STEP 3: Deinitializing camera hardware
+I (12103) STATE_MGR: ╚══════════════════════════════════════════════════
+I (12120) STATE_MGR:   Free heap before: 4039948 bytes
+I (12125) STATE_MGR:   Free PSRAM before: 3985184 bytes
+I (12131) CAMERA: Deinitializing camera...
+I (12137) CAMERA: Camera deinitialized
+I (12141) STATE_MGR:   ✓ Camera deinitialized (took 9 ms)
+I (12147) STATE_MGR:   Free heap after: 4202308 bytes
+I (12152) STATE_MGR:   Free PSRAM after: 4109500 bytes
+I (12158) STATE_MGR: ╔══════════════════════════════════════════════════
+I (12175) STATE_MGR: ║ HARDWARE STABILIZATION - CRITICAL
+I (12181) STATE_MGR: ╚══════════════════════════════════════════════════
+I (12197) STATE_MGR:   Phase 1: Initial settle (100ms) - Free camera interrupts
+I (12305) STATE_MGR:   Phase 2: GPIO matrix settle (100ms) - Reconfigure pins
+I (12405) STATE_MGR:   Phase 3: Final settle (50ms) - Stabilize state
+I (12455) STATE_MGR:   ✓ Total stabilization: 250ms
+I (12455) STATE_MGR:   Timestamp: 10913 ms
+I (12455) STATE_MGR: ╔══════════════════════════════════════════════════
+I (12471) STATE_MGR: ║ STEP 4: Initializing I2S audio drivers
+I (12478) STATE_MGR: ╚══════════════════════════════════════════════════
+I (12494) STATE_MGR:   Free heap before: 4202308 bytes
+I (12500) AUDIO: ╔══════════════════════════════════════════════════════════
+I (12518) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (12525) AUDIO: ╚══════════════════════════════════════════════════════════
+I (12543) AUDIO: ╔══════════════════════════════════════════════════════════
+I (12561) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (12568) AUDIO: ╚══════════════════════════════════════════════════════════
+I (12586) AUDIO: [DIAG] Pre-init state:
+I (12590) AUDIO:   Free heap: 4202308 bytes
+I (12595) AUDIO:   Free internal RAM: 113107 bytes
+I (12601) AUDIO:   Free DMA-capable: 92891 bytes
+I (12606) AUDIO:   Free PSRAM: 4109500 bytes
+I (12611) AUDIO:   Timestamp: 11069 ms
+I (12615) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (12622) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (12630) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (12638) AUDIO:   DMA frame num (per desc): 1020
+I (12644) AUDIO:   DMA total samples (effective): 4080
+I (12650) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (12657) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (12663) AUDIO: ✅ I2S channels created (took 0 ms)
+I (12668) AUDIO:   TX handle: 0x3ffafc50 | RX handle: 0x3ffca6b8
+I (12675) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (12682) AUDIO:   Sample rate: 16000 Hz
+I (12686) AUDIO:   MCLK: DISABLED
+I (12690) AUDIO:   BCLK: GPIO14 (shared)
+I (12695) AUDIO:   WS:   GPIO15 (shared)
+I (12700) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (12706) AUDIO: ✅ TX channel configured (took 1 ms)
+I (12711) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (12718) AUDIO:   Sample rate: 16000 Hz
+I (12722) AUDIO:   MCLK: DISABLED
+I (12726) AUDIO:   BCLK: GPIO14 (shared)
+I (12731) AUDIO:   WS:   GPIO15 (shared)
+I (12736) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (12742) AUDIO: ✅ RX channel configured (took 0 ms)
+I (12747) AUDIO: [STEP 4/6] Enabling TX channel...
+I (12753) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (12758) AUDIO: [STEP 5/6] Enabling RX channel...
+I (12764) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (12769) AUDIO: [STEP 6/6] Hardware stabilization...
+I (12775) AUDIO:   Phase 1: Initial settle (50ms)
+I (12830) AUDIO:   Phase 2: DMA verification
+I (12830) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (12830) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (12987) AUDIO: [DIAG] Post-init state:
+I (12987) AUDIO:   Free heap: 4176332 bytes
+I (12987) AUDIO:   Free internal RAM: 87131 bytes
+I (12991) AUDIO:   Free DMA-capable: 66915 bytes
+I (12996) AUDIO:   Free PSRAM: 4109500 bytes
+I (13001) AUDIO:   Timestamp: 11459 ms
+I (13006) AUDIO:   Total init time: 201 ms
+I (13010) AUDIO: ╔══════════════════════════════════════════════════════════
+I (13028) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+I (13035) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (13040) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (13049) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (13055) AUDIO: ╚══════════════════════════════════════════════════════════
+I (13073) AUDIO: ╔══════════════════════════════════════════════════════════
+I (13091) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (13098) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+I (13104) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (13111) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (13117) AUDIO: ╚══════════════════════════════════════════════════════════
+I (13135) STATE_MGR:   ✓ Audio initialized (took 635 ms)
+I (13141) STATE_MGR:   Free heap after: 4176332 bytes
+I (13147) STATE_MGR: ╔══════════════════════════════════════════════════
+I (13163) STATE_MGR: ║ STEP 5: I2S mutex released
+I (13169) STATE_MGR: ║ Total transition time: 894 ms
+I (13175) STATE_MGR: ╚══════════════════════════════════════════════════
+I (13191) STATE_MGR: ╔══════════════════════════════════════════════════
+I (13207) STATE_MGR: ║ STEP 6: Starting STT/TTS pipelines
+I (13213) STATE_MGR: ╚══════════════════════════════════════════════════
+I (13230) STT: Starting STT pipeline...
+I (13234) STT: [CORE AFFINITY] Creating audio capture task on Core 0 (co-located with Wi-Fi)
+I (13244) STT: ✅ STT pipeline started
+I (13243) STT: [STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...
+I (13255) STT:   Current time: 11713 ms
+I (13259) STT:   Free heap: 4167780 bytes
+I (13244) STT: Audio streaming session activated
+I (13269) STT: Starting audio streaming to server...
+I (13298) TTS: Starting TTS decoder...
+I (13298) TTS: Initializing TTS decoder...
+W (13298) TTS: TTS decoder already initialized
+I (13302) TTS: [CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU) with safety measures
+I (13311) TTS: ✅ TTS decoder started
+I (13351) TTS:   ✓ DMA buffer allocated in PSRAM at 0x3f814b48 (4096 bytes)
+I (13464) STT: [STABILIZATION] Phase 2: Verify audio driver state...
+I (13464) STT:   ✓ Audio driver initialized
+I (13465) STT: [STABILIZATION] Phase 3: Additional 100ms settle...
+I (13572) STT:   Total stabilization: 300ms
+I (13572) STT:   Timestamp: 12030 ms
+I (13572) STT: [BUFFER] Allocating 1024 byte capture buffer...
+I (13576) STT:   ✓ DMA-capable buffer allocated at 0x3fff26ec (with safety padding)
+I (13585) STT: ╔════════════════════════════════════════════════════
+I (13591) LED_CTRL: LED pattern -> 1
+I (13601) STT: ║ 🎤 STARTING AUDIO CAPTURE
+I (13605) STATE_MGR: ✅ Voice mode transition complete
+I (13611) STT: ║ Chunk size: 1024 bytes | Timeout: 100 ms
+I (13616) STATE_MGR: ✅ Entered VOICE_ACTIVE state
+I (13623) STT: ╚════════════════════════════════════════════════════
+I (13638) STATE_MGR: STT pipeline reported start
+I (13660) STATE_MGR: TTS playback start event received
+I (15643) BUTTON: Single click confirmed
+I (15651) STATE_MGR: Button event received: 1 in state VOICE_ACTIVE
+W (15652) STATE_MGR: Guardrail soft override: stopping voice pipeline while busy
+I (15655) STATE_MGR: Single click - mode toggle requested
+I (15661) STATE_MGR: Switching: Voice → Camera (count: 2)
+I (15668) STATE_MGR: === TRANSITION TO CAMERA MODE ===
+I (15674) STATE_MGR: Stopping voice mode components...
+I (15679) STT: Stopping STT pipeline...
+I (15696) STT: Audio capture task stopped (captured 71680 bytes total)
+I (15708) STT: Streaming task received stop signal
+I (15708) STT: Sending EOS signal...
+I (15708) WEBSOCKET: Sending EOS signal
+I (15714) STT: Audio streaming session complete (streamed 69632 bytes in 17 chunks)
+I (15723) WEBSOCKET: Received text message: {"status": "processing", "stage": "transcription"}
+I (15729) WEBSOCKET: Server status: processing
+I (15734) WEBSOCKET: Server stage: transcription
+I (15737) STT: STT pipeline stopped
+I (15739) WEBSOCKET: Pipeline stage changed: idle -> transcription
+I (16219) WEBSOCKET: Received text message: {"status": "processing", "stage": "llm", "transcript": "you know"}
+I (16220) WEBSOCKET: Server status: processing
+I (16224) WEBSOCKET: Server stage: llm
+I (16228) WEBSOCKET: Pipeline stage changed: transcription -> llm
+I (16830) WEBSOCKET: Received text message: {"status": "processing", "stage": "tts", "response": "Could you clarify what you mean?"}
+I (16832) WEBSOCKET: Server status: processing
+I (16837) WEBSOCKET: Server stage: tts
+I (16842) WEBSOCKET: Pipeline stage changed: llm -> tts
+I (17007) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17009) TTS: ✅ WAV header parsed successfully
+I (17009) TTS: === WAV File Info ===
+I (17012) TTS: Sample Rate: 16000 Hz
+I (17016) TTS: Channels: 1
+I (17021) TTS: Bits per Sample: 16
+I (17024) TTS: Audio Format: 1 (PCM)
+I (17026) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17035) TTS: Declared Data Size: 80424 bytes
+I (17039) TTS: Block Align: 2
+I (17041) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17043) TTS: Byte Rate: 32000
+I (17055) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17055) TTS: ====================
+I (17064) WEBSOCKET: Received binary audio data: 656 bytes
+I (17072) WEBSOCKET: Received binary audio data: 3440 bytes
+I (17099) TTS: 🔔 Playback start feedback dispatched (bytes_received=17040)
+I (17100) TTS: [PCM DUP] Scratch buffer ready: 8192 bytes (2048 samples per block)
+I (17156) WEBSOCKET: Received binary audio data: 4096 bytes
+W (17257) TTS: Stream buffer full or timeout - dropped 1 bytes
+I (17264) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17283) WEBSOCKET: Received binary audio data: 4096 bytes
+W (17383) TTS: Stream buffer full or timeout - dropped 4096 bytes
+I (17388) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17411) WEBSOCKET: Received binary audio data: 4096 bytes
+W (17511) TTS: Stream buffer full or timeout - dropped 4096 bytes
+I (17517) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17538) WEBSOCKET: Received binary audio data: 4096 bytes
+W (17639) TTS: Stream buffer full or timeout - dropped 4096 bytes
+I (17646) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17664) WEBSOCKET: Received binary audio data: 1196 bytes
+W (17765) TTS: Stream buffer full or timeout - dropped 1196 bytes
+I (17768) WEBSOCKET: Received binary audio data: 2900 bytes
+I (17793) WEBSOCKET: Received binary audio data: 4096 bytes
+W (17893) TTS: Stream buffer full or timeout - dropped 2900 bytes
+I (17898) WEBSOCKET: Received binary audio data: 4096 bytes
+I (17921) WEBSOCKET: Received binary audio data: 4096 bytes
+W (18021) TTS: Stream buffer full or timeout - dropped 4096 bytes
+I (18027) WEBSOCKET: Received binary audio data: 4096 bytes
+I (18048) WEBSOCKET: Received binary audio data: 4096 bytes
+W (18148) TTS: Stream buffer full or timeout - dropped 4096 bytes
+I (18153) WEBSOCKET: Received binary audio data: 2644 bytes
+I (18174) WEBSOCKET: Received text message: {"status": "complete"}
+I (18174) WEBSOCKET: Server status: complete
+I (18175) WEBSOCKET: Pipeline stage changed: tts -> complete
+I (18193) STATE_MGR: Voice pipeline reported COMPLETE
+I (18193) STATE_MGR: Waiting for TTS playback drain (~13780 bytes pending, timeout 5000 ms)
+W (18679) TTS: Mono chunk size 2643 not aligned to 16-bit samples - writing raw
+W (23198) STATE_MGR: TTS playback drain timed out; proceeding with shutdown
+I (23198) TTS: Stopping TTS decoder...
+I (23243) TTS: EOS requested and stream buffer is empty. Exiting playback task.
+I (23243) TTS: TTS playback task exiting (played 55847 bytes)
+I (23247) TTS:   ✓ DMA buffer freed from PSRAM
+I (23259) TTS: TTS decoder stopped (played 55847 bytes)
+I (23359) STATE_MGR: Acquiring I2S mutex...
+I (23359) STATE_MGR: Deinitializing audio drivers...
+I (23359) AUDIO: ╔══════════════════════════════════════════════════════════
+I (23377) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (23384) AUDIO: ╚══════════════════════════════════════════════════════════
+I (23402) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (23409) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (23415) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (23421) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (23427) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (23483) AUDIO: [STEP 4/5] Deleting RX channel...
+I (23484) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (23484) AUDIO: [STEP 5/5] Deleting TX channel...
+I (23489) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (23494) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (23552) AUDIO: ╔══════════════════════════════════════════════════════════
+I (23559) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (23565) AUDIO: ║ Camera Can Now Initialize
+I (23571) AUDIO: ╚══════════════════════════════════════════════════════════
+I (23589) STATE_MGR: Initializing camera...
+I (23593) CAMERA: Initializing camera...
+I (23598) gpio: GPIO[25]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
+E (23608) gpio: gpio_install_isr_service(503): GPIO isr service already installed
+I (23616) cam_hal: cam init ok
+W (23620) ledc: GPIO 0 is not usable, maybe conflict with others
+I (23626) sccb-ng: pin_sda 26 pin_scl 27
+I (23631) sccb-ng: sccb_i2c_port=1
+I (23636) gpio: GPIO[32]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0
+I (23678) camera: Camera PID=0x26 VER=0x42 MIDL=0x7f MIDH=0xa2
+I (23678) camera: Detected OV2640 camera
+I (23678) camera: Detected camera at address=0x30
+I (23759) cam_hal: PSRAM DMA mode disabled
+I (23759) cam_hal: buffer_size: 32768, half_buffer_size: 4096, node_buffer_size: 2048, node_cnt: 16, total_cnt: 15
+I (23764) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (23770) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (23777) cam_hal: cam config ok
+I (23780) ov2640: Set PLL: clk_2x: 0, clk_div: 0, pclk_auto: 0, pclk_div: 8
+I (23863) CAMERA: Camera initialized successfully
+I (23863) STATE_MGR: I2S mutex released
+I (23863) STATE_MGR: ✅ Camera mode transition complete
+I (23868) AUDIO: ╔══════════════════════════════════════════════════════════
+I (23886) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (23893) AUDIO: ╚══════════════════════════════════════════════════════════
+I (23911) AUDIO: ╔══════════════════════════════════════════════════════════
+I (23929) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (23936) AUDIO: ╚══════════════════════════════════════════════════════════
+I (23954) AUDIO: [DIAG] Pre-init state:
+I (23959) AUDIO:   Free heap: 4031584 bytes
+I (23964) AUDIO:   Free internal RAM: 66699 bytes
+I (23969) AUDIO:   Free DMA-capable: 46483 bytes
+I (23974) AUDIO:   Free PSRAM: 3985184 bytes
+I (23979) AUDIO:   Timestamp: 22437 ms
+I (23984) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (23990) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (23998) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (24007) AUDIO:   DMA frame num (per desc): 1020
+I (24012) AUDIO:   DMA total samples (effective): 4080
+I (24018) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (24025) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (24031) AUDIO: ✅ I2S channels created (took 0 ms)
+I (24037) AUDIO:   TX handle: 0x3ffca81c | RX handle: 0x3ffca960
+I (24043) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (24050) AUDIO:   Sample rate: 16000 Hz
+I (24055) AUDIO:   MCLK: DISABLED
+I (24059) AUDIO:   BCLK: GPIO14 (shared)
+I (24063) AUDIO:   WS:   GPIO15 (shared)
+I (24068) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (24074) AUDIO: ✅ TX channel configured (took 1 ms)
+I (24079) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (24086) AUDIO:   Sample rate: 16000 Hz
+I (24091) AUDIO:   MCLK: DISABLED
+I (24095) AUDIO:   BCLK: GPIO14 (shared)
+I (24099) AUDIO:   WS:   GPIO15 (shared)
+I (24104) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (24110) AUDIO: ✅ RX channel configured (took 0 ms)
+I (24115) AUDIO: [STEP 4/6] Enabling TX channel...
+I (24121) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (24126) AUDIO: [STEP 5/6] Enabling RX channel...
+I (24132) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (24137) AUDIO: [STEP 6/6] Hardware stabilization...
+I (24143) AUDIO:   Phase 1: Initial settle (50ms)
+I (24198) AUDIO:   Phase 2: DMA verification
+I (24198) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (24199) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (24356) AUDIO: [DIAG] Post-init state:
+I (24356) AUDIO:   Free heap: 4005608 bytes
+I (24356) AUDIO:   Free internal RAM: 40723 bytes
+I (24360) AUDIO:   Free DMA-capable: 20507 bytes
+I (24365) AUDIO:   Free PSRAM: 3985184 bytes
+I (24370) AUDIO:   Timestamp: 22828 ms
+I (24375) AUDIO:   Total init time: 201 ms
+I (24379) AUDIO: ╔══════════════════════════════════════════════════════════
+I (24397) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+I (24404) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (24409) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (24418) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (24424) AUDIO: ╚══════════════════════════════════════════════════════════
+I (24442) AUDIO: ╔══════════════════════════════════════════════════════════
+I (24460) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (24467) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+I (24473) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (24480) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (24486) AUDIO: ╚══════════════════════════════════════════════════════════
+I (24787) AUDIO: ╔══════════════════════════════════════════════════════════
+I (24794) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (24802) AUDIO: ╚══════════════════════════════════════════════════════════
+I (24820) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (24827) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (24832) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (24839) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (24844) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (24901) AUDIO: [STEP 4/5] Deleting RX channel...
+I (24902) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (24902) AUDIO: [STEP 5/5] Deleting TX channel...
+I (24907) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (24912) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (24970) AUDIO: ╔══════════════════════════════════════════════════════════
+I (24977) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (24983) AUDIO: ║ Camera Can Now Initialize
+I (24989) AUDIO: ╚══════════════════════════════════════════════════════════
+I (25007) LED_CTRL: LED pattern -> 3
+I (25011) STATE_MGR: ✅ Entered CAMERA_STANDBY state
+I (25027) STATE_MGR: STT pipeline reported stop
+I (25037) STATE_MGR: Pipeline stage event: transcription
+I (25047) STATE_MGR: Pipeline stage event: llm
+I (25057) STATE_MGR: Pipeline stage event: tts
+I (25067) STATE_MGR: Pipeline stage event: complete
+I (29070) STATE_MGR: Button event received: 2 in state CAMERA_STANDBY
+I (29070) STATE_MGR: Double-click detected - triggering capture sequence
+I (29073) STATE_MGR: Starting camera capture sequence
+I (29079) LED_CTRL: LED pattern -> 6
+I (29083) AUDIO: ╔══════════════════════════════════════════════════════════
+I (29101) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (29108) AUDIO: ╚══════════════════════════════════════════════════════════
+I (29126) AUDIO: ╔══════════════════════════════════════════════════════════
+I (29144) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (29152) AUDIO: ╚══════════════════════════════════════════════════════════
+I (29170) AUDIO: [DIAG] Pre-init state:
+I (29174) AUDIO:   Free heap: 4031568 bytes
+I (29179) AUDIO:   Free internal RAM: 66683 bytes
+I (29184) AUDIO:   Free DMA-capable: 46467 bytes
+I (29190) AUDIO:   Free PSRAM: 3985184 bytes
+I (29195) AUDIO:   Timestamp: 27652 ms
+I (29199) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (29206) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (29214) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (29222) AUDIO:   DMA frame num (per desc): 1020
+I (29227) AUDIO:   DMA total samples (effective): 4080
+I (29233) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (29240) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (29247) AUDIO: ✅ I2S channels created (took 0 ms)
+I (29252) AUDIO:   TX handle: 0x3ffca81c | RX handle: 0x3ffca960
+I (29259) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (29265) AUDIO:   Sample rate: 16000 Hz
+I (29270) AUDIO:   MCLK: DISABLED
+I (29274) AUDIO:   BCLK: GPIO14 (shared)
+I (29279) AUDIO:   WS:   GPIO15 (shared)
+I (29283) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (29290) AUDIO: ✅ TX channel configured (took 1 ms)
+I (29295) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (29301) AUDIO:   Sample rate: 16000 Hz
+I (29306) AUDIO:   MCLK: DISABLED
+I (29310) AUDIO:   BCLK: GPIO14 (shared)
+I (29315) AUDIO:   WS:   GPIO15 (shared)
+I (29319) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (29325) AUDIO: ✅ RX channel configured (took 0 ms)
+I (29331) AUDIO: [STEP 4/6] Enabling TX channel...
+I (29336) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (29342) AUDIO: [STEP 5/6] Enabling RX channel...
+I (29347) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (29353) AUDIO: [STEP 6/6] Hardware stabilization...
+I (29358) AUDIO:   Phase 1: Initial settle (50ms)
+I (29414) AUDIO:   Phase 2: DMA verification
+I (29414) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (29415) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (29571) AUDIO: [DIAG] Post-init state:
+I (29571) AUDIO:   Free heap: 4005608 bytes
+I (29571) AUDIO:   Free internal RAM: 40723 bytes
+I (29575) AUDIO:   Free DMA-capable: 20507 bytes
+I (29580) AUDIO:   Free PSRAM: 3985184 bytes
+I (29585) AUDIO:   Timestamp: 28043 ms
+I (29590) AUDIO:   Total init time: 201 ms
+I (29594) AUDIO: ╔══════════════════════════════════════════════════════════
+I (29612) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+I (29619) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (29624) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (29633) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (29639) AUDIO: ╚══════════════════════════════════════════════════════════
+I (29657) AUDIO: ╔══════════════════════════════════════════════════════════
+I (29675) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (29682) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+I (29688) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (29695) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (29701) AUDIO: ╚══════════════════════════════════════════════════════════
+I (30051) AUDIO: ╔══════════════════════════════════════════════════════════
+I (30058) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (30066) AUDIO: ╚══════════════════════════════════════════════════════════
+I (30084) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (30091) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (30096) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (30103) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (30108) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (30165) AUDIO: [STEP 4/5] Deleting RX channel...
+I (30166) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (30166) AUDIO: [STEP 5/5] Deleting TX channel...
+I (30171) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (30176) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (30234) AUDIO: ╔══════════════════════════════════════════════════════════
+I (30241) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (30247) AUDIO: ║ Camera Can Now Initialize
+I (30253) AUDIO: ╚══════════════════════════════════════════════════════════
+I (30271) STATE_MGR: Capturing frame from camera
+I (30276) STATE_MGR: Frame captured: 7993 bytes
+I (30282) JSON_PROTO: Generated session ID: hotpin-998C64-28
+I (30287) STATE_MGR: Uploading image using session hotpin-998C64-28
+I (30294) HTTP_CLIENT: Uploading image: session=hotpin-998C64-28, size=7993 bytes
+I (30304) HTTP_CLIENT: POST body assembled: 8250 bytes
+I (30310) HTTP_CLIENT: Sending POST request to http://10.184.66.58:8000/image
+I (30503) HTTP_CLIENT: HTTP POST Status = 200, content_length = 198
+I (30503) HTTP_CLIENT: Image uploaded successfully
+I (30504) HTTP_CLIENT: Server response: {"status":"success","message":"Image received successfully","session":"hotpin-998C64-28","filename":"image.jpg","size_bytes":7993,"saved_path":"captured_images/hotpin-998C64-28_20251018_233014.jpg"}
+I (30528) STATE_MGR: Image uploaded successfully
+I (30531) LED_CTRL: LED pattern -> 3
+I (30536) STATE_MGR: Camera capture sequence complete
+I (30551) STATE_MGR: Capture complete event: success=1 (ESP_OK)
+I (33478) STATE_MGR: Button event received: 1 in state CAMERA_STANDBY
+I (33478) BUTTON: Single click confirmed
+I (33478) STATE_MGR: Single click - mode toggle requested
+I (33484) STATE_MGR: Switching: Camera → Voice (count: 3)
+I (33491) STATE_MGR: === TRANSITION TO VOICE MODE ===
+I (33496) STATE_MGR: Stopping camera...
+I (33501) STATE_MGR: ╔══════════════════════════════════════════════════
+I (33517) STATE_MGR: ║ STEP 2: Acquiring I2S configuration mutex
+I (33524) STATE_MGR: ╚══════════════════════════════════════════════════
+I (33540) STATE_MGR:   Timeout: 5000 ms
+I (33545) STATE_MGR:   Timestamp: 32002 ms
+I (33550) STATE_MGR:   ✓ Mutex acquired (took 0 ms)
+I (33555) STATE_MGR: ╔══════════════════════════════════════════════════
+I (33571) STATE_MGR: ║ STEP 3: Deinitializing camera hardware
+I (33578) STATE_MGR: ╚══════════════════════════════════════════════════
+I (33594) STATE_MGR:   Free heap before: 4031212 bytes
+I (33600) STATE_MGR:   Free PSRAM before: 3985184 bytes
+I (33606) CAMERA: Deinitializing camera...
+I (33612) CAMERA: Camera deinitialized
+I (33615) STATE_MGR:   ✓ Camera deinitialized (took 9 ms)
+I (33621) STATE_MGR:   Free heap after: 4193596 bytes
+I (33627) STATE_MGR:   Free PSRAM after: 4109500 bytes
+I (33633) STATE_MGR: ╔══════════════════════════════════════════════════
+I (33649) STATE_MGR: ║ HARDWARE STABILIZATION - CRITICAL
+I (33655) STATE_MGR: ╚══════════════════════════════════════════════════
+I (33672) STATE_MGR:   Phase 1: Initial settle (100ms) - Free camera interrupts
+I (33780) STATE_MGR:   Phase 2: GPIO matrix settle (100ms) - Reconfigure pins
+I (33880) STATE_MGR:   Phase 3: Final settle (50ms) - Stabilize state
+I (33930) STATE_MGR:   ✓ Total stabilization: 250ms
+I (33930) STATE_MGR:   Timestamp: 32388 ms
+I (33930) STATE_MGR: ╔══════════════════════════════════════════════════
+I (33946) STATE_MGR: ║ STEP 4: Initializing I2S audio drivers
+I (33953) STATE_MGR: ╚══════════════════════════════════════════════════
+I (33969) STATE_MGR:   Free heap before: 4193596 bytes
+I (33975) AUDIO: ╔══════════════════════════════════════════════════════════
+I (33993) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (34000) AUDIO: ╚══════════════════════════════════════════════════════════
+I (34018) AUDIO: ╔══════════════════════════════════════════════════════════
+I (34036) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (34043) AUDIO: ╚══════════════════════════════════════════════════════════
+I (34061) AUDIO: [DIAG] Pre-init state:
+I (34065) AUDIO:   Free heap: 4193596 bytes
+I (34070) AUDIO:   Free internal RAM: 104395 bytes
+I (34076) AUDIO:   Free DMA-capable: 84179 bytes
+I (34081) AUDIO:   Free PSRAM: 4109500 bytes
+I (34086) AUDIO:   Timestamp: 32544 ms
+I (34090) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (34097) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (34105) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (34113) AUDIO:   DMA frame num (per desc): 1020
+I (34119) AUDIO:   DMA total samples (effective): 4080
+I (34125) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (34132) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (34138) AUDIO: ✅ I2S channels created (took 0 ms)
+I (34143) AUDIO:   TX handle: 0x3ffafc3c | RX handle: 0x3ffcab14
+I (34150) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (34157) AUDIO:   Sample rate: 16000 Hz
+I (34161) AUDIO:   MCLK: DISABLED
+I (34165) AUDIO:   BCLK: GPIO14 (shared)
+I (34170) AUDIO:   WS:   GPIO15 (shared)
+I (34175) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (34181) AUDIO: ✅ TX channel configured (took 1 ms)
+I (34186) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (34193) AUDIO:   Sample rate: 16000 Hz
+I (34197) AUDIO:   MCLK: DISABLED
+I (34201) AUDIO:   BCLK: GPIO14 (shared)
+I (34206) AUDIO:   WS:   GPIO15 (shared)
+I (34211) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (34217) AUDIO: ✅ RX channel configured (took 0 ms)
+I (34222) AUDIO: [STEP 4/6] Enabling TX channel...
+I (34228) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (34233) AUDIO: [STEP 5/6] Enabling RX channel...
+I (34239) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (34244) AUDIO: [STEP 6/6] Hardware stabilization...
+I (34250) AUDIO:   Phase 1: Initial settle (50ms)
+I (34305) AUDIO:   Phase 2: DMA verification
+I (34305) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (34305) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (34462) AUDIO: [DIAG] Post-init state:
+I (34462) AUDIO:   Free heap: 4167608 bytes
+I (34462) AUDIO:   Free internal RAM: 78407 bytes
+I (34466) AUDIO:   Free DMA-capable: 58191 bytes
+I (34471) AUDIO:   Free PSRAM: 4109500 bytes
+I (34476) AUDIO:   Timestamp: 32934 ms
+I (34481) AUDIO:   Total init time: 201 ms
+I (34485) AUDIO: ╔══════════════════════════════════════════════════════════
+I (34503) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+I (34510) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (34515) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (34524) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (34530) AUDIO: ╚══════════════════════════════════════════════════════════
+I (34548) AUDIO: ╔══════════════════════════════════════════════════════════
+I (34566) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (34573) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+I (34579) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (34586) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (34592) AUDIO: ╚══════════════════════════════════════════════════════════
+I (34610) STATE_MGR:   ✓ Audio initialized (took 635 ms)
+I (34616) STATE_MGR:   Free heap after: 4167608 bytes
+I (34622) STATE_MGR: ╔══════════════════════════════════════════════════
+I (34638) STATE_MGR: ║ STEP 5: I2S mutex released
+I (34644) STATE_MGR: ║ Total transition time: 894 ms
+I (34650) STATE_MGR: ╚══════════════════════════════════════════════════
+I (34666) STATE_MGR: ╔══════════════════════════════════════════════════
+I (34682) STATE_MGR: ║ STEP 6: Starting STT/TTS pipelines
+I (34688) STATE_MGR: ╚══════════════════════════════════════════════════
+I (34705) STT: Starting STT pipeline...
+I (34709) STT: [CORE AFFINITY] Creating audio capture task on Core 0 (co-located with Wi-Fi)
+I (34718) STT: ✅ STT pipeline started
+I (34718) STT: [STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...
+I (34730) STT:   Current time: 33188 ms
+I (34719) STT: Audio streaming session activated
+I (34740) STT: Starting audio streaming to server...
+I (34734) STT:   Free heap: 4159056 bytes
+I (34773) TTS: Starting TTS decoder...
+I (34773) TTS: Initializing TTS decoder...
+W (34773) TTS: TTS decoder already initialized
+I (34777) TTS: [CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU) with safety measures
+I (34786) TTS: ✅ TTS decoder started
+I (34826) TTS:   ✓ DMA buffer allocated in PSRAM at 0x3f814b48 (4096 bytes)
+I (34950) STT: [STABILIZATION] Phase 2: Verify audio driver state...
+I (34950) STT:   ✓ Audio driver initialized
+I (34951) STT: [STABILIZATION] Phase 3: Additional 100ms settle...
+I (35058) STT:   Total stabilization: 300ms
+I (35058) STT:   Timestamp: 33516 ms
+I (35058) STT: [BUFFER] Allocating 1024 byte capture buffer...
+I (35062) STT:   ✓ DMA-capable buffer allocated at 0x3ffcaf9c (with safety padding)
+I (35066) LED_CTRL: LED pattern -> 1
+I (35071) STT: ╔════════════════════════════════════════════════════
+I (35075) STATE_MGR: ✅ Voice mode transition complete
+I (35091) STT: ║ 🎤 STARTING AUDIO CAPTURE
+I (35097) STATE_MGR: ✅ Entered VOICE_ACTIVE state
+I (35102) STT: ║ Chunk size: 1024 bytes | Timeout: 100 ms
+I (35114) STT: ╚════════════════════════════════════════════════════
+I (35118) STATE_MGR: STT pipeline reported start
+I (35146) STATE_MGR: TTS playback start event received
+I (38997) BUTTON: Single click confirmed
+I (39006) STATE_MGR: Button event received: 1 in state VOICE_ACTIVE
+W (39007) STATE_MGR: Guardrail soft override: stopping voice pipeline while busy
+I (39011) STATE_MGR: Single click - mode toggle requested
+I (39017) STATE_MGR: Switching: Voice → Camera (count: 4)
+I (39023) STATE_MGR: === TRANSITION TO CAMERA MODE ===
+I (39029) STATE_MGR: Stopping voice mode components...
+I (39034) STT: Stopping STT pipeline...
+I (39068) STT: Capture stopped and ring buffer drained; ending streaming loop
+I (39069) STT: Sending EOS signal...
+I (39069) WEBSOCKET: Sending EOS signal
+I (39077) STT: Audio streaming session complete (streamed 132096 bytes in 33 chunks)
+I (39084) STT: Audio capture task stopped (captured 133120 bytes total)
+I (39090) STT: STT pipeline stopped
+I (39094) TTS: Stopping TTS decoder...
+I (39139) TTS: EOS requested and stream buffer is empty. Exiting playback task.
+I (39139) TTS: TTS playback task exiting (played 0 bytes)
+I (39142) TTS:   ✓ DMA buffer freed from PSRAM
+I (39148) TTS: TTS decoder stopped (played 0 bytes)
+I (39167) WEBSOCKET: Received text message: {"status": "processing", "stage": "transcription"}
+I (39168) WEBSOCKET: Server status: processing
+I (39170) WEBSOCKET: Server stage: transcription
+I (39176) WEBSOCKET: Pipeline stage changed: complete -> transcription
+I (39253) STATE_MGR: Acquiring I2S mutex...
+I (39254) STATE_MGR: Deinitializing audio drivers...
+I (39254) AUDIO: ╔══════════════════════════════════════════════════════════
+I (39271) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (39279) AUDIO: ╚══════════════════════════════════════════════════════════
+I (39296) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (39303) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (39309) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (39315) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (39321) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (39378) AUDIO: [STEP 4/5] Deleting RX channel...
+I (39379) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (39379) AUDIO: [STEP 5/5] Deleting TX channel...
+I (39384) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (39389) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (39447) AUDIO: ╔══════════════════════════════════════════════════════════
+I (39454) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (39460) AUDIO: ║ Camera Can Now Initialize
+I (39466) AUDIO: ╚══════════════════════════════════════════════════════════
+I (39484) STATE_MGR: Initializing camera...
+I (39488) CAMERA: Initializing camera...
+I (39493) gpio: GPIO[25]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
+E (39503) gpio: gpio_install_isr_service(503): GPIO isr service already installed
+I (39511) cam_hal: cam init ok
+W (39515) ledc: GPIO 0 is not usable, maybe conflict with others
+I (39521) sccb-ng: pin_sda 26 pin_scl 27
+I (39526) sccb-ng: sccb_i2c_port=1
+I (39531) gpio: GPIO[32]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0
+I (39573) camera: Camera PID=0x26 VER=0x42 MIDL=0x7f MIDH=0xa2
+I (39573) camera: Detected OV2640 camera
+I (39573) camera: Detected camera at address=0x30
+I (39653) cam_hal: PSRAM DMA mode disabled
+I (39654) cam_hal: buffer_size: 32768, half_buffer_size: 4096, node_buffer_size: 2048, node_cnt: 16, total_cnt: 15
+I (39658) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (39665) cam_hal: Allocating 61440 Byte frame buffer in PSRAM
+I (39672) cam_hal: cam config ok
+I (39675) ov2640: Set PLL: clk_2x: 0, clk_div: 0, pclk_auto: 0, pclk_div: 8
+I (39757) CAMERA: Camera initialized successfully
+I (39757) STATE_MGR: I2S mutex released
+I (39757) STATE_MGR: ✅ Camera mode transition complete
+I (39762) AUDIO: ╔══════════════════════════════════════════════════════════
+I (39769) WEBSOCKET: Received text message: {"status": "processing", "stage": "llm", "transcript": "hello"}
+I (39780) AUDIO: ║ Initializing Modern I2S STD Driver (Full-Duplex)
+I (39791) WEBSOCKET: Server status: processing
+I (39798) AUDIO: ╚══════════════════════════════════════════════════════════
+I (39803) WEBSOCKET: Server stage: llm
+I (39821) AUDIO: ╔══════════════════════════════════════════════════════════
+I (39825) WEBSOCKET: Pipeline stage changed: transcription -> llm
+I (39843) AUDIO: ║ Configuring Modern I2S STD Driver (Separate TX/RX)
+I (39857) AUDIO: ╚══════════════════════════════════════════════════════════
+I (39875) AUDIO: [DIAG] Pre-init state:
+I (39880) AUDIO:   Free heap: 4031180 bytes
+I (39884) AUDIO:   Free internal RAM: 66295 bytes
+I (39890) AUDIO:   Free DMA-capable: 46079 bytes
+I (39895) AUDIO:   Free PSRAM: 3985184 bytes
+I (39900) AUDIO:   Timestamp: 38358 ms
+I (39904) AUDIO: [STEP 1/6] Creating I2S channel pair (TX + RX)...
+I (39911) AUDIO:   Using I2S controller 1 for both channels (full-duplex mode)
+I (39919) AUDIO:   DMA config request: 4 buffers x 1020 samples (requested = 4080)
+I (39927) AUDIO:   DMA frame num (per desc): 1020
+I (39933) AUDIO:   DMA total samples (effective): 4080
+I (39939) AUDIO:   DMA memory committed: 8160 bytes (2 bytes/sample)
+I (39946) AUDIO:   DMA memory: 8160 bytes (2 bytes/sample)
+I (39952) AUDIO: ✅ I2S channels created (took 0 ms)
+I (39958) AUDIO:   TX handle: 0x3ffcae38 | RX handle: 0x3ffcb5d8
+I (39964) AUDIO: [STEP 2/6] Configuring TX (speaker) channel...
+I (39971) AUDIO:   Sample rate: 16000 Hz
+I (39975) AUDIO:   MCLK: DISABLED
+I (39979) AUDIO:   BCLK: GPIO14 (shared)
+I (39984) AUDIO:   WS:   GPIO15 (shared)
+I (39989) AUDIO:   DOUT: GPIO13 (MAX98357A speaker)
+I (39996) AUDIO: ✅ TX channel configured (took 1 ms)
+I (40000) AUDIO: [STEP 3/6] Configuring RX (microphone) channel...
+I (40007) AUDIO:   Sample rate: 16000 Hz
+I (40011) AUDIO:   MCLK: DISABLED
+I (40015) AUDIO:   BCLK: GPIO14 (shared)
+I (40020) AUDIO:   WS:   GPIO15 (shared)
+I (40025) AUDIO:   DIN:  GPIO2 (INMP441 microphone)
+I (40031) AUDIO: ✅ RX channel configured (took 0 ms)
+I (40036) AUDIO: [STEP 4/6] Enabling TX channel...
+I (40042) AUDIO: ✅ TX channel enabled (took 0 ms)
+I (40047) AUDIO: [STEP 5/6] Enabling RX channel...
+I (40053) AUDIO: ✅ RX channel enabled (took 0 ms)
+I (40058) AUDIO: [STEP 6/6] Hardware stabilization...
+I (40064) AUDIO:   Phase 1: Initial settle (50ms)
+I (40119) AUDIO:   Phase 2: DMA verification
+I (40119) AUDIO:   ✓ DMA TX operational (128 bytes)
+I (40120) AUDIO:   Phase 3: Additional settle (150ms) - CRITICAL for RX DMA
+I (40178) WEBSOCKET: Received text message: {"status": "processing", "stage": "tts", "response": "Hello! How can I help you today?"}
+I (40181) WEBSOCKET: Server status: processing
+I (40186) WEBSOCKET: Server stage: tts
+I (40190) WEBSOCKET: Pipeline stage changed: llm -> tts
+I (40264) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40264) TTS: Decoder not running - dropping 4096-byte chunk
+I (40275) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40275) TTS: Decoder not running - dropping 4096-byte chunk
+I (40276) AUDIO: [DIAG] Post-init state:
+I (40283) AUDIO:   Free heap: 4003388 bytes
+I (40285) WEBSOCKET: Received binary audio data: 1656 bytes
+W (40294) TTS: Decoder not running - dropping 1656-byte chunk
+I (40288) AUDIO:   Free internal RAM: 36471 bytes
+I (40303) WEBSOCKET: Received binary audio data: 2440 bytes
+I (40306) AUDIO:   Free DMA-capable: 14955 bytes
+W (40312) TTS: Decoder not running - dropping 2440-byte chunk
+I (40317) AUDIO:   Free PSRAM: 3985320 bytes
+I (40329) AUDIO:   Timestamp: 38786 ms
+I (40329) WEBSOCKET: Received binary audio data: 4096 bytes
+I (40333) AUDIO:   Total init time: 201 ms
+W (40339) TTS: Decoder not running - dropping 4096-byte chunk
+I (40344) AUDIO: ╔══════════════════════════════════════════════════════════
+I (40356) WEBSOCKET: Received binary audio data: 4096 bytes
+I (40369) AUDIO: ║ ✅ MODERN I2S STD FULL-DUPLEX READY
+W (40375) TTS: Decoder not running - dropping 4096-byte chunk
+I (40381) AUDIO: ║ Driver: i2s_std (NOT legacy!)
+I (40393) AUDIO: ║ Mode: Master TX+RX | Rate: 16000 Hz | Format: TX stereo / RX mono
+I (40401) AUDIO: ║ This should eliminate LoadStoreError crashes!
+I (40408) AUDIO: ╚══════════════════════════════════════════════════════════
+I (40393) WEBSOCKET: Received binary audio data: 4096 bytes
+I (40426) AUDIO: ╔══════════════════════════════════════════════════════════
+W (40432) TTS: Decoder not running - dropping 4096-byte chunk
+I (40450) AUDIO: ║ ✅ MODERN I2S STD DRIVER INITIALIZED
+I (40463) WEBSOCKET: Received binary audio data: 4096 bytes
+I (40463) AUDIO: ║ Mode: Full-duplex (separate TX + RX channels)
+W (40469) TTS: Decoder not running - dropping 4096-byte chunk
+I (40476) AUDIO: ║ TX (Speaker): GPIO13 | RX (Microphone): GPIO2
+I (40488) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40496) TTS: Decoder not running - dropping 4096-byte chunk
+I (40489) AUDIO: ║ Shared Clock: BCLK=GPIO14, WS=GPIO15
+I (40508) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40514) TTS: Decoder not running - dropping 4096-byte chunk
+I (40508) AUDIO: ╚══════════════════════════════════════════════════════════
+I (40526) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40545) TTS: Decoder not running - dropping 4096-byte chunk
+I (40557) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40558) TTS: Decoder not running - dropping 4096-byte chunk
+I (40570) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40570) TTS: Decoder not running - dropping 4096-byte chunk
+I (40582) WEBSOCKET: Received binary audio data: 2416 bytes
+W (40583) TTS: Decoder not running - dropping 2416-byte chunk
+I (40592) WEBSOCKET: Received binary audio data: 1680 bytes
+W (40596) TTS: Decoder not running - dropping 1680-byte chunk
+I (40607) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40608) TTS: Decoder not running - dropping 4096-byte chunk
+I (40620) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40621) TTS: Decoder not running - dropping 4096-byte chunk
+I (40632) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40634) TTS: Decoder not running - dropping 4096-byte chunk
+I (40645) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40646) TTS: Decoder not running - dropping 4096-byte chunk
+I (40658) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40659) TTS: Decoder not running - dropping 4096-byte chunk
+I (40670) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40672) TTS: Decoder not running - dropping 4096-byte chunk
+I (40682) WEBSOCKET: Received binary audio data: 1076 bytes
+W (40684) TTS: Decoder not running - dropping 1076-byte chunk
+I (40693) WEBSOCKET: Received binary audio data: 3020 bytes
+W (40697) TTS: Decoder not running - dropping 3020-byte chunk
+I (40708) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40710) TTS: Decoder not running - dropping 4096-byte chunk
+I (40722) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40722) TTS: Decoder not running - dropping 4096-byte chunk
+I (40735) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40735) TTS: Decoder not running - dropping 4096-byte chunk
+I (40748) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40748) TTS: Decoder not running - dropping 4096-byte chunk
+I (40759) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40760) TTS: Decoder not running - dropping 4096-byte chunk
+I (40773) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40773) TTS: Decoder not running - dropping 4096-byte chunk
+I (40784) WEBSOCKET: Received binary audio data: 4096 bytes
+W (40786) TTS: Decoder not running - dropping 4096-byte chunk
+I (40796) WEBSOCKET: Received binary audio data: 976 bytes
+W (40798) TTS: Decoder not running - dropping 976-byte chunk
+I (40807) WEBSOCKET: Received text message: {"status": "complete"}
+I (40812) WEBSOCKET: Server status: complete
+I (40817) WEBSOCKET: Pipeline stage changed: tts -> complete
+I (40822) AUDIO: ╔══════════════════════════════════════════════════════════
+I (40841) AUDIO: ║ Deinitializing Modern I2S STD Driver for Camera Capture
+I (40849) AUDIO: ╚══════════════════════════════════════════════════════════
+I (40866) AUDIO: [STEP 1/5] Disabling RX (microphone) channel...
+I (40873) AUDIO: ✅ RX channel disabled (took 0 ms)
+I (40879) AUDIO: [STEP 2/5] Disabling TX (speaker) channel...
+I (40885) AUDIO: ✅ TX channel disabled (took 0 ms)
+I (40891) AUDIO: [STEP 3/5] Waiting for DMA completion (50ms)...
+I (40948) AUDIO: [STEP 4/5] Deleting RX channel...
+I (40949) AUDIO: ✅ RX channel deleted (took 0 ms)
+I (40949) AUDIO: [STEP 5/5] Deleting TX channel...
+I (40954) AUDIO: ✅ TX channel deleted (took 0 ms)
+I (40959) AUDIO: Additional settling time (50ms) for interrupt/GPIO matrix...
+I (41017) AUDIO: ╔══════════════════════════════════════════════════════════
+I (41024) AUDIO: ║ ✅ Modern I2S STD Driver Deinitialized
+I (41030) AUDIO: ║ Camera Can Now Initialize
+I (41036) AUDIO: ╚══════════════════════════════════════════════════════════
+I (41054) LED_CTRL: LED pattern -> 3
+I (41058) STATE_MGR: ✅ Entered CAMERA_STANDBY state
+I (41074) STATE_MGR: STT pipeline reported stop
+I (41084) STATE_MGR: Pipeline stage event: transcription
+I (41094) STATE_MGR: Pipeline stage event: llm
+I (41104) STATE_MGR: Pipeline stage event: tts
+I (41114) STATE_MGR: Pipeline stage event: complete
+*)

@@ -59,7 +59,7 @@ SERVER_PORT=8000
 
 Ensure your Vosk model is located at:
 ```
-F:\Documents\College\6th Semester\Project\ESP_Warp\model\
+./model/
 ```
 
 The model directory should contain files like:

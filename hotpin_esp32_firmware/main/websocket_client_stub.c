@@ -127,6 +127,7 @@ bool websocket_client_session_ready(void) {
 
 bool websocket_client_can_stream_audio(void) {
     return is_connected;
+}
 
 void websocket_client_set_audio_callback(websocket_audio_callback_t callback, void *arg) {
     g_audio_callback = callback;

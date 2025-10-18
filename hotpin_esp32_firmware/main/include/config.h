@@ -191,7 +191,13 @@
  ******************************************************************************/
 
 // PSRAM allocation with DMA capability
+// CRITICAL: Never use PSRAM for executable code or function pointers
 #define MALLOC_CAP_PSRAM_DMA        (MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA)
+
+// Safety wrapper for PSRAM allocation - adds guard bytes
+#define PSRAM_SAFE_MALLOC(size)     heap_caps_malloc((size) + 32, MALLOC_CAP_SPIRAM); \
+                                    memset(((uint8_t*)(ptr)) + (size), 0xAA, 16); \
+                                    memset(((uint8_t*)(ptr)) + (size) + 16, 0xBB, 16)
 
 /*******************************************************************************
  * DEBUG CONFIGURATION
