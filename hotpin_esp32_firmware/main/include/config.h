@@ -131,10 +131,10 @@
 #define TASK_PRIORITY_STATE_MANAGER         10      // System orchestrator (Core 1)
 #define TASK_PRIORITY_I2S_AUDIO             9       // Real-time audio I/O (Core 0)
 #define TASK_PRIORITY_WEBSOCKET             8       // Network I/O (Core 0)
-#define TASK_PRIORITY_STT_PROCESSING        7       // Audio preprocessing (Core 0)
+#define TASK_PRIORITY_STT_PROCESSING        5       // Audio preprocessing (Core 0) - Lowered priority
 #define TASK_PRIORITY_CAMERA_CAPTURE        6       // Frame acquisition (Core 1)
 #define TASK_PRIORITY_BUTTON_FSM            5       // Button handling (Core 0)
-#define TASK_PRIORITY_TTS_DECODER           5       // TTS WAV parsing (Core 0)
+#define TASK_PRIORITY_TTS_DECODER           5       // TTS WAV parsing (Core 0) - Priority unified
 
 // Core affinity
 #define TASK_CORE_PRO                       0       // Core 0 - I/O operations

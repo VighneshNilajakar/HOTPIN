@@ -838,6 +838,9 @@ static esp_err_t transition_to_voice_mode(void) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start STT pipeline: %s", esp_err_to_name(ret));
     }
+
+    // Brief stagger prevents simultaneous startup logs from contending on UART
+    vTaskDelay(pdMS_TO_TICKS(50));
     
     ret = tts_decoder_start();
     if (ret != ESP_OK) {

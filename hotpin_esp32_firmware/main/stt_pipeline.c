@@ -270,7 +270,7 @@ esp_err_t stt_pipeline_start(void) {
     BaseType_t ret = xTaskCreatePinnedToCore(
         audio_capture_task,
         "stt_capture",
-        TASK_STACK_SIZE_MEDIUM,
+        TASK_STACK_SIZE_LARGE,
         NULL,
         TASK_PRIORITY_STT_PROCESSING,
         &g_audio_capture_task_handle,
@@ -371,9 +371,9 @@ const stt_pipeline_handle_t *stt_pipeline_get_handle(void) {
 // ===========================
 
 static void audio_capture_task(void *pvParameters) {
-    ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
-    ESP_LOGI(TAG, "║ Audio Capture Task Started on Core %d", xPortGetCoreID());
-    ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
+    // ESP_LOGI(TAG, "╔════════════════════════════════════════════════════");
+    // ESP_LOGI(TAG, "║ Audio Capture Task Started on Core %d", xPortGetCoreID());
+    // ESP_LOGI(TAG, "╚════════════════════════════════════════════════════");
     
     // CRITICAL: Extended wait for I2S hardware to fully stabilize before first read
     ESP_LOGI(TAG, "[STABILIZATION] Phase 1: Waiting 200ms for I2S DMA...");

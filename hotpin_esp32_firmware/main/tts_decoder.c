@@ -194,9 +194,9 @@ esp_err_t tts_decoder_start(void) {
     eos_requested = false;
     memset(&wav_info, 0, sizeof(wav_info));
     
-    // CRITICAL FIX: Pin TTS playback task to Core 0 (same as Wi-Fi and STT tasks)
-    // Co-locating all high-bandwidth audio tasks on Core 0 resolves hardware bus contention
-    ESP_LOGI(TAG, "[CORE AFFINITY] Creating TTS playback task on Core 0 (co-located with Wi-Fi and STT)");
+    // CRITICAL FIX: Move TTS playback task to Core 1 to prevent Core 0 starvation
+    // Core 0 handles WiFi/TCP and STT input, Core 1 handles state management and TTS output
+    ESP_LOGI(TAG, "[CORE AFFINITY] Creating TTS playback task on Core 1 (APP_CPU)");
     BaseType_t ret = xTaskCreatePinnedToCore(
         tts_playback_task,
         "tts_playback",
@@ -204,7 +204,7 @@ esp_err_t tts_decoder_start(void) {
         NULL,
         TASK_PRIORITY_TTS_DECODER,
         &g_playback_task_handle,
-        TASK_CORE_AUDIO_IO  // Core 0 - CRITICAL: Co-locate with Wi-Fi and I2S RX to prevent DMA corruption
+        TASK_CORE_CONTROL  // Core 1 - Balance load across cores to prevent watchdog timeout
     );
     
     if (ret != pdPASS) {
@@ -296,7 +296,7 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
 }
 
 static void tts_playback_task(void *pvParameters) {
-    ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
+    // ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
 
     uint8_t dma_buffer[AUDIO_CHUNK_SIZE];
     esp_err_t playback_result = ESP_OK;

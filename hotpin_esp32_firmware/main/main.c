@@ -159,9 +159,9 @@ void app_main(void) {
     ESP_LOGI(TAG, "Initializing button handler...");
     ESP_ERROR_CHECK(button_handler_init());
     
-    // Initialize serial command interface for debugging
-    ESP_LOGI(TAG, "Initializing serial command interface...");
-    ESP_ERROR_CHECK(serial_commands_init());
+    // Serial command interface disabled to reduce UART contention during voice mode
+    // ESP_LOGI(TAG, "Initializing serial command interface...");
+    // ESP_ERROR_CHECK(serial_commands_init());
     
     ESP_LOGI(TAG, "Initializing LED controller...");
     ESP_ERROR_CHECK(led_controller_init());
