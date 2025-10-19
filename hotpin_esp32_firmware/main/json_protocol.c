@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 static const char *TAG = "JSON_PROTO";
 

@@ -428,6 +428,13 @@ static void websocket_connection_task(void *pvParameters) {
     ESP_LOGI(TAG, "WebSocket connection task started on Core %d", xPortGetCoreID());
 
     while (true) {
+        // Check for system shutdown state
+        system_state_t current_state = state_manager_get_state();
+        if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+            ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+            break;
+        }
+
         xEventGroupWaitBits(
             g_network_event_group,
             NETWORK_EVENT_WIFI_CONNECTED,
@@ -439,6 +446,13 @@ static void websocket_connection_task(void *pvParameters) {
         attempt = 0;
 
         while ((xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
+            // Check for system shutdown state
+            current_state = state_manager_get_state();
+            if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                break;
+            }
+
             if (!websocket_client_is_connected()) {
                 attempt++;
                 ESP_LOGI(TAG, "🔌 Attempting WebSocket connection (attempt %d)...", attempt);
@@ -453,6 +467,13 @@ static void websocket_connection_task(void *pvParameters) {
             TickType_t wait_duration = pdMS_TO_TICKS(retry_delay_ms);
 
             while (!websocket_client_is_connected()) {
+                // Check for system shutdown state
+                current_state = state_manager_get_state();
+                if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    break;
+                }
+
                 if ((xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) == 0) {
                     break;
                 }
@@ -462,6 +483,13 @@ static void websocket_connection_task(void *pvParameters) {
                 }
 
                 vTaskDelay(poll_delay);
+            }
+
+            // Check for system shutdown state
+            current_state = state_manager_get_state();
+            if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                break;
             }
 
             if (!websocket_client_is_connected()) {
@@ -486,7 +514,21 @@ static void websocket_connection_task(void *pvParameters) {
 
             while (websocket_client_is_connected() &&
                    (xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
+                // Check for system shutdown state
+                current_state = state_manager_get_state();
+                if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    break;
+                }
+
                 vTaskDelay(pdMS_TO_TICKS(2000));
+            }
+
+            // Check for system shutdown state
+            current_state = state_manager_get_state();
+            if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                break;
             }
 
             ESP_LOGW(TAG, "WebSocket link not healthy, restarting connection");
@@ -494,7 +536,17 @@ static void websocket_connection_task(void *pvParameters) {
             websocket_client_force_stop();
             vTaskDelay(pdMS_TO_TICKS(500));
         }
+        
+        // Check for system shutdown state
+        current_state = state_manager_get_state();
+        if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
+            ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+            break;
+        }
     }
+    
+    ESP_LOGI(TAG, "WebSocket connection task terminated");
+    vTaskDelete(NULL);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,

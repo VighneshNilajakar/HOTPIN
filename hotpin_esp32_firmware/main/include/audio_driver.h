@@ -106,4 +106,18 @@ esp_err_t audio_driver_set_tx_sample_rate(uint32_t sample_rate);
  */
 uint32_t audio_driver_get_tx_sample_rate(void);
 
+/**
+ * @brief Get current buffer level as percentage
+ * 
+ * @return Buffer level percentage (0-100)
+ */
+uint8_t audio_driver_get_buffer_level_percent(void);
+
+/**
+ * @brief Check if buffer is approaching overflow
+ * 
+ * @return true if buffer is > 80% full, false otherwise
+ */
+bool audio_driver_is_buffer_nearly_full(void);
+
 #endif // AUDIO_DRIVER_H

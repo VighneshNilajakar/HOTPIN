@@ -164,6 +164,15 @@ esp_err_t websocket_client_connect(void) {
         return ESP_OK;
     }
     
+    // Stop any existing connection attempt first to clean up state
+    if (is_started) {
+        esp_err_t stop_ret = esp_websocket_client_stop(g_ws_client);
+        if (stop_ret != ESP_OK && stop_ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "WebSocket client stop before connect: %s", esp_err_to_name(stop_ret));
+        }
+        is_started = false;
+    }
+    
     esp_err_t ret = esp_websocket_client_start(g_ws_client);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start WebSocket client: %s", esp_err_to_name(ret));
@@ -217,22 +226,24 @@ esp_err_t websocket_client_disconnect(void) {
 
 esp_err_t websocket_client_force_stop(void) {
     if (!is_initialized || g_ws_client == NULL) {
-    is_connected = false;
-    g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
-    g_session_ready = false;
-    is_started = false;
+        is_connected = false;
+        g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+        g_session_ready = false;
+        is_started = false;
         return ESP_OK;
     }
 
     ESP_LOGI(TAG, "Force stopping WebSocket client");
 
-    esp_err_t close_ret = esp_websocket_client_close(g_ws_client, 0);
+    // First try graceful close with reasonable timeout
+    esp_err_t close_ret = esp_websocket_client_close_with_wait(g_ws_client, portMAX_DELAY);
     if (close_ret != ESP_OK && close_ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "Force close returned %s", esp_err_to_name(close_ret));
+        ESP_LOGW(TAG, "Graceful close returned %s", esp_err_to_name(close_ret));
     }
 
     if (is_started) {
-        esp_err_t stop_ret = esp_websocket_client_stop(g_ws_client);
+        // Stop the client with a reasonable timeout to allow cleanup
+        esp_err_t stop_ret = esp_websocket_client_stop_with_timeout(g_ws_client, 5000);  // 5 second timeout
         if (stop_ret == ESP_ERR_INVALID_STATE) {
             stop_ret = ESP_OK;
         } else if (stop_ret != ESP_OK) {

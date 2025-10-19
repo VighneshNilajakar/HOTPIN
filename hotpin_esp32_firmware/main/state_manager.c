@@ -227,6 +227,30 @@ static void guardrails_signal_block(const char *reason) {
 }
 
 static bool guardrails_should_block_button(button_event_type_t type) {
+    static uint32_t last_button_event_time = 0;
+    static const uint32_t MIN_BUTTON_INTERVAL_MS = 500;  // Minimum 500ms between button events
+    static const uint32_t MIN_VOICE_STATE_TRANSITION_DELAY_MS = 1000;  // Minimum delay for voice state transitions
+    
+    uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    uint32_t time_since_last = current_time - last_button_event_time;
+    
+    // Throttle button events to prevent rapid transitions
+    if (time_since_last < MIN_BUTTON_INTERVAL_MS) {
+        guardrails_signal_block("rapid button event");
+        return true;
+    }
+    
+    // Additional throttle for voice state transitions since they involve complex hardware setup
+    if ((current_state == SYSTEM_STATE_VOICE_ACTIVE || 
+         previous_state == SYSTEM_STATE_VOICE_ACTIVE) &&
+        (type == BUTTON_EVENT_SINGLE_CLICK) && 
+        time_since_last < MIN_VOICE_STATE_TRANSITION_DELAY_MS) {
+        ESP_LOGW(TAG, "Throttling voice mode transition (elapsed: %u ms, required: %u ms)", 
+                 (unsigned int)time_since_last, (unsigned int)MIN_VOICE_STATE_TRANSITION_DELAY_MS);
+        guardrails_signal_block("voice mode transition too rapid");
+        return true;
+    }
+
     if (s_transition_in_progress) {
         guardrails_signal_block("state transition in progress");
         return true;
@@ -237,15 +261,28 @@ static bool guardrails_should_block_button(button_event_type_t type) {
         return true;
     }
 
-    if ((type == BUTTON_EVENT_SINGLE_CLICK || type == BUTTON_EVENT_DOUBLE_CLICK) && guardrails_is_pipeline_busy()) {
-        if (type == BUTTON_EVENT_SINGLE_CLICK && current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+    // For voice active state, be more restrictive about transitions during pipeline operations
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE && guardrails_is_pipeline_busy()) {
+        if (type == BUTTON_EVENT_SINGLE_CLICK) {
+            // Allow single click to stop voice pipeline but with warning
             ESP_LOGW(TAG, "Guardrail soft override: stopping voice pipeline while busy");
-        } else {
-            guardrails_signal_block("audio pipeline busy");
+        } else if (type == BUTTON_EVENT_DOUBLE_CLICK) {
+            // Block double click during voice pipeline activity
+            guardrails_signal_block("audio pipeline busy - blocking capture");
             return true;
         }
     }
 
+    // Block all transitions if pipeline is busy and not in voice active state
+    if ((type == BUTTON_EVENT_SINGLE_CLICK || type == BUTTON_EVENT_DOUBLE_CLICK) && 
+        guardrails_is_pipeline_busy() && 
+        current_state != SYSTEM_STATE_VOICE_ACTIVE) {
+        guardrails_signal_block("audio pipeline busy");
+        return true;
+    }
+    
+    // Update last button event time
+    last_button_event_time = current_time;
     return false;
 }
 
@@ -282,12 +319,14 @@ static void process_button_event(const button_event_payload_t *button_event)
     ESP_LOGI(TAG, "Button event received: %d in state %s",
              button_event->type, state_to_string(current_state));
 
-    if (current_state == SYSTEM_STATE_TRANSITIONING) {
+    // More robust check for transitioning state
+    if (current_state == SYSTEM_STATE_TRANSITIONING || s_transition_in_progress) {
         ESP_LOGW(TAG, "Button event ignored - system transitioning");
         return;
     }
 
-    if (button_event->type != BUTTON_EVENT_LONG_PRESS &&
+    // Enhanced guardrail check with detailed logging
+    if (button_event->type != BUTTON_EVENT_LONG_PRESS && 
         button_event->type != BUTTON_EVENT_LONG_PRESS_RELEASE) {
         if (guardrails_should_block_button(button_event->type)) {
             return;
@@ -306,6 +345,9 @@ static void process_button_event(const button_event_payload_t *button_event)
                 current_state = SYSTEM_STATE_TRANSITIONING;
                 s_transition_in_progress = true;
 
+                // Ensure all previous operations are completed before starting transition
+                vTaskDelay(pdMS_TO_TICKS(50));
+                
                 esp_err_t voice_ret = transition_to_voice_mode();
                 s_transition_in_progress = false;
 
@@ -328,6 +370,9 @@ static void process_button_event(const button_event_payload_t *button_event)
                 current_state = SYSTEM_STATE_TRANSITIONING;
                 s_transition_in_progress = true;
 
+                // Ensure all previous operations are completed before starting transition
+                vTaskDelay(pdMS_TO_TICKS(50));
+                
                 esp_err_t cam_ret = transition_to_camera_mode();
                 s_transition_in_progress = false;
 
@@ -495,7 +540,7 @@ static void wait_for_voice_pipeline_shutdown(void) {
     while (!websocket_client_is_pipeline_active()) {
         websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
         if (stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
-            return;  // Already complete, nothing to wait for
+            break;  // Complete, can proceed
         }
 
         if ((xTaskGetTickCount() - guard_start) >= guard_timeout) {
@@ -513,7 +558,8 @@ static void wait_for_voice_pipeline_shutdown(void) {
         websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
         bool pipeline_active = websocket_client_is_pipeline_active();
 
-        if (!pipeline_active) {
+        if (!pipeline_active && stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
+            // Pipeline is truly idle (not in TTS stage)
             if (stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
                 ESP_LOGI(TAG, "Voice pipeline reported COMPLETE");
             } else {
@@ -534,20 +580,45 @@ static void wait_for_voice_pipeline_shutdown(void) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    if (tts_decoder_has_pending_audio()) {
+    // Wait for TTS playback to complete before proceeding
+    if (tts_decoder_has_pending_audio() || s_tts_playback_active) {
         size_t pending_bytes = tts_decoder_get_pending_bytes();
         ESP_LOGI(TAG, "Waiting for TTS playback drain (~%zu bytes pending, timeout %u ms)",
                  pending_bytes, (unsigned int)VOICE_TTS_FLUSH_WAIT_MS);
 
-        esp_err_t wait_ret = tts_decoder_wait_for_idle(VOICE_TTS_FLUSH_WAIT_MS);
-        if (wait_ret == ESP_OK) {
-            ESP_LOGI(TAG, "TTS playback drained successfully");
-        } else if (wait_ret == ESP_ERR_TIMEOUT) {
-            ESP_LOGW(TAG, "TTS playback drain timed out; proceeding with shutdown");
-        } else if (wait_ret == ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "TTS decoder not initialized while waiting for drain");
-        } else {
-            ESP_LOGE(TAG, "Error while waiting for TTS drain: %s", esp_err_to_name(wait_ret));
+        // Wait in smaller increments and check for state changes
+        const TickType_t tts_start = xTaskGetTickCount();
+        const TickType_t tts_timeout = pdMS_TO_TICKS(VOICE_TTS_FLUSH_WAIT_MS);
+        bool tts_drained = false;
+        
+        while (!tts_drained) {
+            esp_err_t wait_ret = tts_decoder_wait_for_idle(pdMS_TO_TICKS(100));
+            websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+            bool pipeline_still_active = websocket_client_is_pipeline_active();
+            
+            // Check if TTS has completed or if there's no more pending audio
+            if (!tts_decoder_has_pending_audio() && !s_tts_playback_active) {
+                tts_drained = true;
+                ESP_LOGI(TAG, "TTS playback drained successfully");
+                break;
+            }
+            
+            // Check for timeout
+            if ((xTaskGetTickCount() - tts_start) >= tts_timeout) {
+                ESP_LOGW(TAG, "TTS playback drain timed out; proceeding with shutdown");
+                break;
+            }
+            
+            // If the pipeline has moved to complete state and no audio is pending, we can continue
+            if (current_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE && 
+                !pipeline_still_active && 
+                !tts_decoder_has_pending_audio()) {
+                tts_drained = true;
+                ESP_LOGI(TAG, "TTS drain complete - pipeline finished");
+                break;
+            }
+            
+            esp_task_wdt_reset();
         }
     }
 }
@@ -562,9 +633,13 @@ static esp_err_t transition_to_camera_mode(void) {
     if (previous_state == SYSTEM_STATE_VOICE_ACTIVE) {
         ESP_LOGI(TAG, "Stopping voice mode components...");
         
-        // Stop STT pipeline and wait for downstream playback to drain
+        // Stop STT pipeline first, then wait for all voice pipeline operations to complete
         stt_pipeline_stop();
+        
+        // Wait for the complete voice pipeline shutdown, including TTS playback
         wait_for_voice_pipeline_shutdown();
+        
+        // Now it's safe to stop the TTS decoder after all audio has been processed
         tts_decoder_stop();
         s_tts_playback_active = false;
         s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
@@ -624,9 +699,21 @@ static esp_err_t transition_to_camera_mode(void) {
 static esp_err_t capture_and_upload_image(void) {
     ESP_LOGI(TAG, "Capturing frame from camera");
 
+    // Check if audio drivers are active and deinitialize them temporarily for better camera performance
+    bool audio_was_initialized = audio_driver_is_initialized();
+    if (audio_was_initialized) {
+        ESP_LOGI(TAG, "Temporarily deinit audio drivers for camera capture");
+        audio_driver_deinit();
+    }
+
     camera_fb_t *fb = camera_controller_capture_frame();
     if (fb == NULL) {
         ESP_LOGE(TAG, "Frame capture failed");
+
+        // Reinitialize audio if it was active before capture
+        if (audio_was_initialized) {
+            audio_driver_init();
+        }
         return ESP_FAIL;
     }
 
@@ -641,6 +728,14 @@ static esp_err_t capture_and_upload_image(void) {
                                              response, sizeof(response));
 
     esp_camera_fb_return(fb);
+
+    // Reinitialize audio if it was active before capture
+    if (audio_was_initialized) {
+        esp_err_t audio_ret = audio_driver_init();
+        if (audio_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to reinitialize audio after capture: %s", esp_err_to_name(audio_ret));
+        }
+    }
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Image uploaded successfully");
@@ -687,19 +782,39 @@ static esp_err_t handle_camera_capture(void) {
     bool capture_success = false;
     esp_err_t ret = ESP_OK;
     bool camera_initialized_here = false;
+    bool audio_was_active_before_capture = false;
 
     if (current_state != SYSTEM_STATE_CAMERA_STANDBY) {
         ESP_LOGW(TAG, "Camera capture requested during %s", state_to_string(current_state));
     }
 
+    // Check if audio drivers are active and temporarily disable them during capture
+    // This can improve camera capture stability since both use DMA resources
+    audio_was_active_before_capture = audio_driver_is_initialized();
+
     if (!camera_controller_is_initialized()) {
         ESP_LOGI(TAG, "Camera not initialized; attempting setup before capture");
+        
+        // If audio was active, we might need to deinitialize it to free up GPIO/ISR resources
+        if (audio_was_active_before_capture) {
+            ESP_LOGI(TAG, "Audio drivers active, deinit for camera setup");
+            audio_driver_deinit();
+        }
+        
         ret = camera_controller_init();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(ret));
+            
+            // Reinitialize audio if it was active before capture attempt
+            if (audio_was_active_before_capture) {
+                esp_err_t audio_ret = audio_driver_init();
+                if (audio_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to reinitialize audio after failed capture: %s", esp_err_to_name(audio_ret));
+                }
+            }
             goto finalize_capture;
         }
-        camera_initialized_here = (current_state != SYSTEM_STATE_CAMERA_STANDBY);
+        camera_initialized_here = true;
     }
 
     ret = capture_and_upload_image();
@@ -709,6 +824,16 @@ finalize_capture:
     if (camera_initialized_here) {
         ESP_LOGI(TAG, "Deinitializing temporary camera session after capture");
         camera_controller_deinit();
+    }
+
+    // Restore audio if it was active before capture
+    if (audio_was_active_before_capture && !camera_initialized_here && current_state == SYSTEM_STATE_CAMERA_STANDBY) {
+        // Only reinitialize audio if we didn't fully deinit the camera
+        // and we're staying in camera mode (not transitioning)
+        esp_err_t audio_ret = audio_driver_init();
+        if (audio_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to reinitialize audio after capture: %s", esp_err_to_name(audio_ret));
+        }
     }
 
     if (capture_success) {
@@ -860,6 +985,7 @@ static esp_err_t transition_to_voice_mode(void) {
 static esp_err_t handle_shutdown(void) {
     ESP_LOGW(TAG, "=== SYSTEM SHUTDOWN ===");
     
+    // Play shutdown feedback first before deinitializing audio
     esp_err_t shutdown_sound_ret = feedback_player_play(FEEDBACK_SOUND_SHUTDOWN);
     if (shutdown_sound_ret != ESP_OK) {
         ESP_LOGW(TAG, "Shutdown feedback failed: %s", esp_err_to_name(shutdown_sound_ret));

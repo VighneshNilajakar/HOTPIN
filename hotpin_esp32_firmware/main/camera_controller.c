@@ -28,8 +28,9 @@ esp_err_t camera_controller_init(void) {
                 gpio_isr_installed = true;
                 ESP_LOGI(TAG, "GPIO ISR service installed");
             } else if (isr_ret == ESP_ERR_INVALID_STATE) {
+                // This error means the service is already installed by another module
                 gpio_isr_installed = true;
-                ESP_LOGW(TAG, "GPIO ISR service already installed (shared)");
+                ESP_LOGI(TAG, "GPIO ISR service already installed (shared)");
             } else {
                 ESP_LOGE(TAG, "Failed to install GPIO ISR service: %s", esp_err_to_name(isr_ret));
                 return isr_ret;

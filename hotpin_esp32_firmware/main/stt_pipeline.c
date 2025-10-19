@@ -377,7 +377,7 @@ static void audio_capture_task(void *pvParameters) {
     // This detects corrupted function pointers and prevents system crashes
     uint32_t pc_check = (uint32_t)__builtin_return_address(0);
     if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
-        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Task executing from PSRAM (0x%08x) - preventing crash!", (unsigned int)pc_check);
         if (g_audio_capture_task_handle == xTaskGetCurrentTaskHandle()) {
             g_audio_capture_task_handle = NULL;
         }
@@ -560,7 +560,7 @@ static void audio_streaming_task(void *pvParameters) {
     // CRITICAL SAFETY CHECK: Prevent InstructionFetchError crash from PSRAM execution
     uint32_t pc_check = (uint32_t)__builtin_return_address(0);
     if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
-        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Streaming task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: Streaming task executing from PSRAM (0x%08x) - preventing crash!", (unsigned int)pc_check);
         g_audio_streaming_task_handle = NULL;
         vTaskDelete(NULL);
         return;

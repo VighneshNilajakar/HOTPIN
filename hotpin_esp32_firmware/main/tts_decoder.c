@@ -43,8 +43,9 @@ typedef struct {
 } wav_runtime_info_t;
 
 // Stream buffer for audio data
-#define TTS_STREAM_BUFFER_SIZE (16 * 1024)  // 16KB buffer for incoming audio
-#define TTS_STREAM_BUFFER_TRIGGER_LEVEL 1   // Trigger on any data
+// Increased buffer size for better buffering performance
+#define TTS_STREAM_BUFFER_SIZE (64 * 1024)  // Increased from 16KB to 64KB for better buffering
+#define TTS_STREAM_BUFFER_TRIGGER_LEVEL (8 * 1024)  // Increased from 1KB to 8KB trigger level
 #define AUDIO_CHUNK_SIZE        4096        // DMA buffer size for I2S playback
 static StreamBufferHandle_t g_audio_stream_buffer = NULL;
 static uint8_t* g_stream_buffer_storage = NULL; // Storage will be in PSRAM
@@ -170,23 +171,23 @@ esp_err_t tts_decoder_deinit(void) {
 }
 
 esp_err_t tts_decoder_start(void) {
-    ESP_LOGI(TAG, "Starting TTS decoder...");
-    
+    ESP_LOGI(TAG, "🎵 Starting TTS decoder...");
+
     if (!is_initialized) {
         ESP_LOGE(TAG, "TTS decoder not initialized");
         return ESP_ERR_INVALID_STATE;
     }
-    
+
     if (is_running) {
         ESP_LOGW(TAG, "TTS decoder already running");
         return ESP_OK;
     }
-    
+
     // Initialize decoder
     if (tts_decoder_init() != ESP_OK) {
         return ESP_FAIL;
     }
-    
+
     // Reset state
     header_parsed = false;
     header_bytes_received = 0;
@@ -195,7 +196,7 @@ esp_err_t tts_decoder_start(void) {
     playback_feedback_sent = false;
     eos_requested = false;
     memset(&wav_info, 0, sizeof(wav_info));
-    
+
     // CRITICAL FIX: Move TTS playback task to Core 1 to prevent Core 0 starvation
     // Core 0 handles WiFi/TCP and STT input, Core 1 handles state management and TTS output
     // IMPORTANT: Add safety padding to prevent buffer overflows
@@ -209,12 +210,12 @@ esp_err_t tts_decoder_start(void) {
         &g_playback_task_handle,
         TASK_CORE_CONTROL  // Core 1 - Balance load across cores to prevent watchdog timeout
     );
-    
+
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create playback task");
         return ESP_FAIL;
     }
-    
+
     esp_err_t clk_ret = audio_driver_set_tx_sample_rate(CONFIG_AUDIO_SAMPLE_RATE);
     if (clk_ret != ESP_OK) {
         ESP_LOGW(TAG, "Unable to reset TX sample rate at decoder start: %s", esp_err_to_name(clk_ret));
@@ -222,7 +223,7 @@ esp_err_t tts_decoder_start(void) {
 
     is_running = true;
     is_playing = true;
-    
+
     system_event_t evt = {
         .type = SYSTEM_EVENT_TTS_PLAYBACK_STARTED,
         .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
@@ -231,25 +232,26 @@ esp_err_t tts_decoder_start(void) {
         ESP_LOGW(TAG, "Failed to enqueue TTS playback start event");
     }
 
-    ESP_LOGI(TAG, "✅ TTS decoder started");
+    ESP_LOGI(TAG, "✅ TTS decoder started successfully");
     return ESP_OK;
 }
 
 esp_err_t tts_decoder_stop(void) {
-    ESP_LOGI(TAG, "Stopping TTS decoder...");
-    
+    ESP_LOGI(TAG, "⏹️ Stopping TTS decoder...");
+
     if (!is_running) {
         ESP_LOGW(TAG, "TTS decoder not running");
         return ESP_OK;
     }
-    
+
     is_playing = false;
     is_running = false;
     eos_requested = true;
 
+    // First, wait for any ongoing audio playback to complete
     // Wait for playback task to cleanly terminate
     const TickType_t wait_step = pdMS_TO_TICKS(10);
-    for (int attempts = 0; attempts < 50; attempts++) {
+    for (int attempts = 0; attempts < 100; attempts++) {  // Increased attempts to allow more time
         if (g_playback_task_handle == NULL) {
             break;
         }
@@ -267,7 +269,7 @@ esp_err_t tts_decoder_stop(void) {
         ESP_LOGW(TAG, "Failed to restore TX sample rate during stop: %s", esp_err_to_name(clk_ret));
     }
     
-    ESP_LOGI(TAG, "TTS decoder stopped (played %zu bytes)", pcm_bytes_played);
+    ESP_LOGI(TAG, "⏹️ TTS decoder stopped (played %zu bytes)", pcm_bytes_played);
     return ESP_OK;
 }
 
@@ -282,18 +284,45 @@ bool tts_decoder_is_playing(void) {
 static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
     ESP_LOGD(TAG, "Received audio chunk: %zu bytes", len);
 
-    if (!is_running) {
-        ESP_LOGW(TAG, "Decoder not running - dropping %zu-byte chunk", len);
-        return;
-    }
-
     if (g_audio_stream_buffer != NULL) {
-        size_t bytes_sent = xStreamBufferSend(g_audio_stream_buffer, data, len, pdMS_TO_TICKS(100));
+        // Check available space before sending to prevent blocking
+        size_t available_space = xStreamBufferSpacesAvailable(g_audio_stream_buffer);
+        
+        // If buffer is nearly full, drop the data to prevent blocking
+        if (available_space < (len + 1024)) {  // Leave 1KB safety margin
+            static uint32_t drop_count = 0;
+            drop_count++;
+            if ((drop_count % 25) == 0) {  // Log every 25 drops to prevent log spam
+                ESP_LOGW(TAG, "Stream buffer nearly full - dropping %zu bytes (available: %zu, drops: %u)", 
+                         len, available_space, (unsigned int)drop_count);
+            }
+            return;
+        }
+        
+        // Send data with shorter timeout to prevent blocking
+        size_t bytes_sent = xStreamBufferSend(g_audio_stream_buffer, data, len, pdMS_TO_TICKS(25));
         if (bytes_sent != len) {
-            ESP_LOGW(TAG, "Stream buffer full or timeout - dropped %d bytes", len - bytes_sent);
+            static uint32_t timeout_count = 0;
+            timeout_count++;
+            if ((timeout_count % 10) == 0) {  // Log every 10 timeouts to prevent log spam
+                ESP_LOGW(TAG, "Stream buffer timeout - dropped %zu bytes (sent: %zu, timeouts: %u)", 
+                         len - bytes_sent, bytes_sent, (unsigned int)timeout_count);
+            }
         } else {
             bytes_received += len;
-            ESP_LOGD(TAG, "Sent %zu bytes to stream buffer (total received: %zu)", len, bytes_received);
+            static uint32_t success_count = 0;
+            success_count++;
+            if ((success_count % 100) == 0) {  // Log every 100 successes to prevent log spam
+                ESP_LOGD(TAG, "Sent %zu bytes to stream buffer (total received: %zu, successes: %u)", 
+                         len, bytes_received, (unsigned int)success_count);
+            }
+        }
+    } else {
+        // Only log when decoder is not initialized at all
+        static uint32_t drop_count = 0;
+        drop_count++;
+        if ((drop_count % 50) == 0) {  // Log every 50 drops to prevent log spam
+            ESP_LOGW(TAG, "Decoder not initialized - dropping %zu-byte chunk (drops: %u)", len, (unsigned int)drop_count);
         }
     }
 }
@@ -302,13 +331,13 @@ static void tts_playback_task(void *pvParameters) {
     // CRITICAL SAFETY CHECK: Prevent InstructionFetchError crash from PSRAM execution
     uint32_t pc_check = (uint32_t)__builtin_return_address(0);
     if ((pc_check >= 0x3F800000) && (pc_check < 0x40000000)) {
-        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: TTS task executing from PSRAM (0x%08"PRIx32") - preventing crash!", pc_check);
+        ESP_LOGE(TAG, "❌ EMERGENCY ABORT: TTS task executing from PSRAM (0x%08x) - preventing crash!", (unsigned int)pc_check);
         g_playback_task_handle = NULL;
         vTaskDelete(NULL);
         return;
     }
     
-    // ESP_LOGI(TAG, "TTS playback task started on Core %d", xPortGetCoreID());
+    ESP_LOGI(TAG, "🎵 TTS playback task started on Core %d", xPortGetCoreID());
 
     // CRITICAL FIX: Allocate DMA buffer in PSRAM instead of on stack to prevent stack overflow
     // Stack allocation of 4KB buffer was causing stack overflow in tts_playback task
@@ -330,11 +359,39 @@ static void tts_playback_task(void *pvParameters) {
             g_audio_stream_buffer,
             dma_buffer,
             AUDIO_CHUNK_SIZE,
-            pdMS_TO_TICKS(100) // Wait up to 100ms for data
+            pdMS_TO_TICKS(50) // Reduced from 100ms to 50ms for better responsiveness
         );
 
         if (bytes_received_from_stream > 0) {
             // We have data, process it
+            static uint32_t buffer_monitor_count = 0;
+            buffer_monitor_count++;
+            
+            // Monitor buffer levels periodically to detect overflow conditions early
+            if ((buffer_monitor_count % 50) == 0) {  // Check every 50 iterations
+                size_t buffer_space = xStreamBufferSpacesAvailable(g_audio_stream_buffer);
+                size_t buffer_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+                ESP_LOGD(TAG, "[BUFFER MONITOR] Level: %zu bytes | Space: %zu bytes | Ratio: %.2f%%", 
+                         buffer_level, buffer_space, 
+                         (buffer_level * 100.0) / (buffer_level + buffer_space));
+                         
+                // Warn if buffer is getting full
+                if (buffer_level > (TTS_STREAM_BUFFER_SIZE * 0.8)) {  // 80% full
+                    ESP_LOGW(TAG, "⚠ Stream buffer approaching capacity: %zu/%d bytes (%.1f%%)", 
+                             buffer_level, TTS_STREAM_BUFFER_SIZE, 
+                             (buffer_level * 100.0) / TTS_STREAM_BUFFER_SIZE);
+                }
+            }
+            
+            // Adaptive flow control - slow down when buffer is getting full
+            size_t current_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+            if (current_level > (TTS_STREAM_BUFFER_SIZE * 0.75)) {
+                // Buffer is 75% full - add small delay to let processing catch up
+                vTaskDelay(pdMS_TO_TICKS(2));
+            } else if (current_level > (TTS_STREAM_BUFFER_SIZE * 0.9)) {
+                // Buffer is 90% full - add larger delay to prevent overflow
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
             if (!header_parsed) {
                 // Still parsing header - accumulate into header_buffer
                 if (header_bytes_received + bytes_received_from_stream > WAV_HEADER_BUFFER_MAX) {
@@ -433,7 +490,8 @@ static void tts_playback_task(void *pvParameters) {
         }
     }
     
-    ESP_LOGI(TAG, "TTS playback task exiting (played %zu bytes)", pcm_bytes_played);
+    ESP_LOGI(TAG, "🎵 TTS playback task exiting (played %zu bytes, result: %s)", 
+             pcm_bytes_played, esp_err_to_name(playback_result));
     
     // CRITICAL FIX: Free PSRAM-allocated DMA buffer before task exits
     if (dma_buffer != NULL) {
@@ -526,10 +584,19 @@ static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, s
         return ret;
     }
 
+    // Add comprehensive logging to verify audio playback
+    static size_t total_bytes_played = 0;
+    total_bytes_played += written;
+    
     if (s_passthrough_logs < 6) {
-        ESP_LOGD(TAG, "[PCM PASS] Wrote %zu raw bytes", length);
+        ESP_LOGI(TAG, "[PCM PLAYBACK] Successfully wrote %zu bytes to I2S driver (total: %zu bytes)", 
+                 written, total_bytes_played);
         s_passthrough_logs++;
+    } else if ((s_passthrough_logs % 100) == 0) {
+        ESP_LOGI(TAG, "[PCM PLAYBACK] Ongoing - wrote %zu bytes (total: %zu bytes)", 
+                 written, total_bytes_played);
     }
+    s_passthrough_logs++;
 
     if (accounted_bytes) {
         *accounted_bytes = accounted;
@@ -708,6 +775,27 @@ void tts_decoder_notify_end_of_stream(void) {
 
     eos_requested = true;
     ESP_LOGI(TAG, "TTS end-of-stream signaled");
+    
+    // Flush any remaining data in the stream buffer to prevent overflow
+    if (g_audio_stream_buffer != NULL) {
+        size_t buffer_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+        if (buffer_level > 0) {
+            ESP_LOGI(TAG, "Flushing %zu bytes from stream buffer", buffer_level);
+            // Drain the buffer by reading all available data
+            uint8_t dummy_buffer[1024];
+            size_t bytes_drained = 0;
+            while (xStreamBufferBytesAvailable(g_audio_stream_buffer) > 0) {
+                size_t chunk = xStreamBufferReceive(g_audio_stream_buffer, dummy_buffer, 
+                                                   sizeof(dummy_buffer), pdMS_TO_TICKS(10));
+                if (chunk > 0) {
+                    bytes_drained += chunk;
+                } else {
+                    break; // No more data or timeout
+                }
+            }
+            ESP_LOGI(TAG, "Flushed %zu bytes from stream buffer", bytes_drained);
+        }
+    }
 }
 
 static void print_wav_info(const wav_runtime_info_t *info) {
