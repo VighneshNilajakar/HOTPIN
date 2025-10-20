@@ -183,7 +183,7 @@ esp_err_t transition_to_voice_mode(void);
 **Key Function Signatures:**
 ```c
 esp_err_t button_handler_init(void);
-void IRAM_ATTR button_isr_handler(void *arg);
+void button_isr_handler(void *arg);
 void button_fsm_task(void *pvParameters);
 ```
 

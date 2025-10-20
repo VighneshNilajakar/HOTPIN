@@ -12,31 +12,9 @@
 
 static const char *TAG = TAG_CAMERA;
 static bool is_initialized = false;
-static bool gpio_isr_installed = false;  // FIX: Track GPIO ISR service state
 
 esp_err_t camera_controller_init(void) {
     ESP_LOGI(TAG, "Initializing camera...");
-    
-    // Install GPIO ISR service only if not already provided by button handler
-    if (!gpio_isr_installed) {
-        if (button_handler_isr_service_installed()) {
-            gpio_isr_installed = true;
-            ESP_LOGI(TAG, "GPIO ISR service already active (shared)");
-        } else {
-            esp_err_t isr_ret = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_SHARED);
-            if (isr_ret == ESP_OK) {
-                gpio_isr_installed = true;
-                ESP_LOGI(TAG, "GPIO ISR service installed");
-            } else if (isr_ret == ESP_ERR_INVALID_STATE) {
-                // This error means the service is already installed by another module
-                gpio_isr_installed = true;
-                ESP_LOGI(TAG, "GPIO ISR service already installed (shared)");
-            } else {
-                ESP_LOGE(TAG, "Failed to install GPIO ISR service: %s", esp_err_to_name(isr_ret));
-                return isr_ret;
-            }
-        }
-    }
     
     // Camera configuration with AI-Thinker pin mapping
     camera_config_t camera_config = {
@@ -58,8 +36,8 @@ esp_err_t camera_controller_init(void) {
         .pin_pclk = CONFIG_CAMERA_PIN_PCLK,
         
         .xclk_freq_hz = CONFIG_CAMERA_XCLK_FREQ,
-        .ledc_timer = LEDC_TIMER_0,
-        .ledc_channel = LEDC_CHANNEL_0,
+        .ledc_timer = LEDC_TIMER_2,
+        .ledc_channel = LEDC_CHANNEL_2,
         
         .pixel_format = PIXFORMAT_JPEG,
         .frame_size = FRAMESIZE_VGA,
@@ -87,10 +65,20 @@ esp_err_t camera_controller_deinit(void) {
         return ESP_OK;
     }
     
+    // Add hardware reset
+    if (CONFIG_CAMERA_PIN_RESET != -1) {
+        gpio_set_level(CONFIG_CAMERA_PIN_RESET, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level(CONFIG_CAMERA_PIN_RESET, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
     esp_err_t ret = esp_camera_deinit();
     if (ret == ESP_OK) {
         is_initialized = false;
         ESP_LOGI(TAG, "Camera deinitialized");
+    } else {
+        ESP_LOGE(TAG, "Camera deinit failed: %s", esp_err_to_name(ret));
     }
     
     return ret;

@@ -25,6 +25,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, F
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
+import nltk
+
+# Download NLTK data if not already present
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
+
 # Import core modules
 from core.llm_client import (
     init_client, 
@@ -83,7 +95,7 @@ def get_network_info():
                             network_info['interface'] = 'WiFi'
                             break
             except Exception as e:
-                print(f"⚠ Could not get WiFi SSID: {e}")
+                print(f"Could not get WiFi SSID: {e}")
         
         # Get local IP address
         try:
@@ -99,7 +111,7 @@ def get_network_info():
             network_info['ip_address'] = socket.gethostbyname(socket.gethostname())
     
     except Exception as e:
-        print(f"⚠ Error getting network info: {e}")
+        print(f"Error getting network info: {e}")
     
     return network_info
 
@@ -112,12 +124,12 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     print("\n" + "="*60)
-    print("🚀 Hotpin Prototype Server Starting...")
+    print("Hotpin Prototype Server Starting...")
     print("="*60)
     
     # Display network information
     network_info = get_network_info()
-    print(f"\n📡 Network Information:")
+    print(f"\nNetwork Information:")
     print(f"   WiFi Network: {network_info['wifi_name']}")
     print(f"   IP Address: {network_info['ip_address']}")
     print(f"   Interface: {network_info['interface']}")
@@ -129,7 +141,7 @@ async def lifespan(app: FastAPI):
     try:
         init_client()
     except Exception as e:
-        print(f"✗ Failed to initialize Groq client: {e}")
+        print(f"Failed to initialize Groq client: {e}")
         print("⚠ Server will start but LLM functionality will not work")
     
     # Initialize Vosk STT model
@@ -139,18 +151,18 @@ async def lifespan(app: FastAPI):
         print(f"   Model: {model_info['model_path']}")
         print(f"   Format: {model_info['sample_rate']}Hz, {model_info['channels']} channel, {model_info['sample_width']*8}-bit")
     except Exception as e:
-        print(f"✗ Failed to initialize Vosk model: {e}")
+        print(f"Failed to initialize Vosk model: {e}")
         print("⚠ Server will start but STT functionality will not work")
     
     # Test pyttsx3 TTS engine
     try:
         test_tts_engine()
     except Exception as e:
-        print(f"✗ Failed to test TTS engine: {e}")
+        print(f"Failed to test TTS engine: {e}")
         print("⚠ Server will start but TTS functionality may not work")
     
     print("="*60)
-    print(f"✓ Server ready at ws://{SERVER_HOST}:{SERVER_PORT}/ws")
+    print(f"Server ready at ws://{SERVER_HOST}:{SERVER_PORT}/ws")
     print("="*60 + "\n")
     
     yield  # Server runs here
@@ -166,7 +178,7 @@ async def lifespan(app: FastAPI):
     # Clear all session data
     SESSION_AUDIO_BUFFERS.clear()
     
-    print("✓ All resources cleaned up")
+    print("All resources cleaned up")
     print("="*60 + "\n")
 
 
@@ -308,7 +320,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # Accept WebSocket connection
         await websocket.accept()
-        print(f"🔌 New WebSocket connection established")
+        print(f"New WebSocket connection established")
         
         # Step 1: Handshake - receive session ID
         handshake_message = await websocket.receive_text()
@@ -319,7 +331,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1008, reason="Missing session_id in handshake")
             return
         
-        print(f"✓ Session initialized: {session_id}")
+        print(f"Session initialized: {session_id}")
         
         # Initialize audio buffer for this session
         SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
@@ -410,26 +422,38 @@ async def websocket_endpoint(websocket: WebSocket):
                         
                         print(f"🤖 [{session_id}] LLM response: \"{llm_response}\"")
                         
-                        # Send LLM response text (optional feedback)
-                        await websocket.send_text(json.dumps({
-                            "status": "processing",
-                            "stage": "tts",
-                            "response": llm_response
-                        }))
+                        # Validate LLM response before TTS synthesis
+                        if not llm_response or llm_response.strip() == "":
+                            print(f"⚠ [{session_id}] Empty LLM response, using fallback message")
+                            llm_response = "I'm sorry, I couldn't generate a response. Please try again."
                         
-                        # Step 4: TTS - Synthesize audio (blocking, run in thread pool)
-                        wav_bytes = await asyncio.to_thread(
-                            synthesize_response_audio,
-                            llm_response
-                        )
-                        
-                        print(f"🔊 [{session_id}] Streaming {len(wav_bytes)} bytes of audio response...")
-                        
-                        # Step 5: Stream audio response in chunks (async)
-                        chunk_size = 4096  # 4KB chunks
-                        for i in range(0, len(wav_bytes), chunk_size):
-                            chunk = wav_bytes[i:i + chunk_size]
-                            await websocket.send_bytes(chunk)
+                        # Split the response into sentences
+                        sentences = nltk.sent_tokenize(llm_response)
+
+                        for sentence in sentences:
+                            if not sentence.strip():
+                                continue
+
+                            # Send LLM response text (optional feedback)
+                            await websocket.send_text(json.dumps({
+                                "status": "processing",
+                                "stage": "tts",
+                                "response": sentence
+                            }))
+                            
+                            # Step 4: TTS - Synthesize audio (blocking, run in thread pool)
+                            wav_bytes = await asyncio.to_thread(
+                                synthesize_response_audio,
+                                sentence
+                            )
+                            
+                            print(f"🔊 [{session_id}] Streaming {len(wav_bytes)} bytes of audio response...")
+                            
+                            # Step 5: Stream audio response in chunks (async)
+                            chunk_size = 4096  # 4KB chunks
+                            for i in range(0, len(wav_bytes), chunk_size):
+                                chunk = wav_bytes[i:i + chunk_size]
+                                await websocket.send_bytes(chunk)
                         
                         # Send completion signal
                         await websocket.send_text(json.dumps({
@@ -439,10 +463,25 @@ async def websocket_endpoint(websocket: WebSocket):
                         print(f"✓ [{session_id}] Response streaming complete")
                     
                     except Exception as processing_error:
+                        import traceback
+                        error_details = traceback.format_exc()
                         print(f"✗ [{session_id}] Processing error: {processing_error}")
+                        print(f"   Stack trace:\n{error_details}")
                         await websocket.send_text(json.dumps({
                             "status": "error",
-                            "message": "An error occurred while processing your request."
+                            "message": "An error occurred while processing your request.",
+                            "error_type": type(processing_error).__name__
+                        }))
+                    
+                    except Exception as processing_error:
+                        import traceback
+                        error_details = traceback.format_exc()
+                        print(f"✗ [{session_id}] Processing error: {processing_error}")
+                        print(f"   Stack trace:\n{error_details}")
+                        await websocket.send_text(json.dumps({
+                            "status": "error",
+                            "message": "An error occurred while processing your request.",
+                            "error_type": type(processing_error).__name__
                         }))
                     
                     finally:
@@ -460,10 +499,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f"🔄 [{session_id}] Session reset")
     
     except WebSocketDisconnect:
-        print(f"🔌 WebSocket disconnected: {session_id}")
+        print(f"WebSocket disconnected: {session_id}")
     
     except Exception as e:
-        print(f"✗ WebSocket error [{session_id}]: {e}")
+        print(f"WebSocket error [{session_id}]: {e}")
         try:
             await websocket.close(code=1011, reason=f"Server error: {str(e)}")
         except:

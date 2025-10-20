@@ -86,6 +86,7 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
         bytes: Complete WAV audio file data normalized to 16 kHz mono PCM
     
     Raises:
+        ValueError: If input text is empty or whitespace only
         Exception: If synthesis fails or engine initialization fails
     
     Process:
@@ -98,6 +99,15 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
     7. Clean up temporary file
     8. Return audio bytes
     """
+    # Input validation - must be done BEFORE thread pool execution
+    if not text or text.strip() == "":
+        error_msg = "Cannot synthesize empty text. Provide non-empty string."
+        print(f"✗ TTS input validation error: {error_msg}")
+        raise ValueError(error_msg)
+    
+    # Sanitize text for TTS (remove problematic characters)
+    text = text.strip()
+    
     engine = None
     temp_fd = None
     temp_path = None
@@ -143,12 +153,17 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
         # Normalize to device-friendly PCM format
         wav_bytes = _ensure_pcm_format(wav_bytes)
         
-        print(f"✓ TTS synthesis completed: {len(wav_bytes)} bytes generated")
+        print(f"TTS synthesis completed: {len(wav_bytes)} bytes generated")
         
         return wav_bytes
     
+    except ValueError as ve:
+        # Re-raise validation errors with context
+        print(f"TTS validation error: {ve}")
+        raise
+    
     except Exception as e:
-        print(f"✗ TTS synthesis error: {e}")
+        print(f"TTS synthesis error: {type(e).__name__}: {e}")
         raise
     
     finally:
@@ -156,9 +171,9 @@ def synthesize_response_audio(text: str, rate: int = DEFAULT_RATE) -> bytes:
         if temp_path and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
-                print(f"✓ Cleaned up temp file: {temp_path}")
+                print(f"Cleaned up temp file: {temp_path}")
             except Exception as cleanup_error:
-                print(f"⚠ Failed to cleanup temp file {temp_path}: {cleanup_error}")
+                print(f"Failed to cleanup temp file {temp_path}: {cleanup_error}")
         
         # Close file descriptor if still open (edge case)
         if temp_fd is not None:
@@ -199,7 +214,7 @@ def get_available_voices() -> list:
         return voice_info
     
     except Exception as e:
-        print(f"✗ Error getting voices: {e}")
+        print(f"Error getting voices: {e}")
         return []
 
 
@@ -214,8 +229,8 @@ def test_tts_engine() -> bool:
     try:
         engine = pyttsx3.init()
         engine.stop()
-        print("✓ pyttsx3 TTS engine test successful")
+        print("pyttsx3 TTS engine test successful")
         return True
     except Exception as e:
-        print(f"✗ pyttsx3 TTS engine test failed: {e}")
+        print(f"pyttsx3 TTS engine test failed: {e}")
         return False

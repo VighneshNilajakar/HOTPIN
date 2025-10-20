@@ -41,7 +41,7 @@ static bool isr_triggered = false;
 // ===========================
 // Forward Declarations
 // ===========================
-static void IRAM_ATTR button_isr_handler(void *arg);
+static void button_isr_handler(void *arg);
 static void button_fsm_task(void *pvParameters);
 static void debounce_timer_callback(TimerHandle_t xTimer);
 static void long_press_timer_callback(TimerHandle_t xTimer);
@@ -190,7 +190,7 @@ void button_handler_reset(void) {
 // Private Functions
 // ===========================
 
-static void IRAM_ATTR button_isr_handler(void *arg) {
+static void button_isr_handler(void *arg) {
     // Set flag for FSM task to handle
     isr_triggered = true;
     

@@ -235,15 +235,15 @@ esp_err_t websocket_client_force_stop(void) {
 
     ESP_LOGI(TAG, "Force stopping WebSocket client");
 
-    // First try graceful close with reasonable timeout
-    esp_err_t close_ret = esp_websocket_client_close_with_wait(g_ws_client, portMAX_DELAY);
+    // First try to close the connection gracefully
+    esp_err_t close_ret = esp_websocket_client_close(g_ws_client, 1000); // 1 second timeout for close
     if (close_ret != ESP_OK && close_ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "Graceful close returned %s", esp_err_to_name(close_ret));
     }
 
     if (is_started) {
-        // Stop the client with a reasonable timeout to allow cleanup
-        esp_err_t stop_ret = esp_websocket_client_stop_with_timeout(g_ws_client, 5000);  // 5 second timeout
+        // Stop the client to terminate the connection thread
+        esp_err_t stop_ret = esp_websocket_client_stop(g_ws_client);
         if (stop_ret == ESP_ERR_INVALID_STATE) {
             stop_ret = ESP_OK;
         } else if (stop_ret != ESP_OK) {

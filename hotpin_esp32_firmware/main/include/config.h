@@ -15,7 +15,7 @@
 #define CONFIG_H
 
 #include "driver/gpio.h"
-#include "driver/i2s.h"
+#include "driver/i2s_std.h"
 
 /*******************************************************************************
  * SYSTEM CONFIGURATION

@@ -4,36 +4,24 @@
 # ===========================
 # CPU Configuration
 # ===========================
-CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y
-CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=240
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 
 # ===========================
 # PSRAM (External RAM) - CRITICAL
 # ===========================
-CONFIG_ESP32_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TYPE_AUTO=y
-CONFIG_SPIRAM_SIZE=4194304
 CONFIG_SPIRAM_SPEED_40M=y
-CONFIG_SPIRAM_ALLOW_DMA=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 
 # ===========================
-# Critical Fix: Prevent PSRAM from being used for executable code
-# This prevents InstructionFetchError crashes when code jumps to PSRAM
-# ===========================
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
-CONFIG_SPIRAM_RODATA=n
-
-# ===========================
 # Memory Management
 # ===========================
-CONFIG_ESP32_WIFI_DYNAMIC_RX_BUFFER_NUM=32
-CONFIG_ESP32_WIFI_DYNAMIC_TX_BUFFER_NUM=32
-CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=16
-CONFIG_ESP32_WIFI_STATIC_TX_BUFFER_NUM=16
+
 
 # ===========================
 # Camera Configuration
@@ -41,11 +29,6 @@ CONFIG_ESP32_WIFI_STATIC_TX_BUFFER_NUM=16
 CONFIG_CAMERA_CORE0=n
 CONFIG_CAMERA_CORE1=y
 CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=32768
-
-# ===========================
-# Disable SD/MMC (CRITICAL - Conflicts with I2S)
-# ===========================
-CONFIG_ENABLE_SDMMC_HOST=n
 
 # ===========================
 # I2S Configuration (CRITICAL for Audio)
@@ -67,21 +50,21 @@ CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
 # ===========================
 # WiFi Configuration
 # ===========================
-CONFIG_ESP32_WIFI_AMPDU_TX_ENABLED=y
-CONFIG_ESP32_WIFI_AMPDU_RX_ENABLED=y
-CONFIG_ESP32_WIFI_NVS_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+CONFIG_ESP_WIFI_NVS_ENABLED=y
 
 # ===========================
 # Task Watchdog
 # ===========================
-CONFIG_ESP_TASK_WDT=y
+CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=n
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 
 # ===========================
 # Brownout Detector (Disabled for stability)
 # ===========================
-CONFIG_ESP32_BROWNOUT_DET=n
+CONFIG_ESP_BROWNOUT_DET=n
 
 # ===========================
 # Logging Configuration
@@ -94,7 +77,6 @@ CONFIG_LOG_COLORS=y
 # WebSocket Configuration
 # ===========================
 CONFIG_WS_BUFFER_SIZE=8192
-CONFIG_WS_TRANSPORT_MAX_MESSAGE_SIZE=8192
 
 # ===========================
 # Partition Table
@@ -107,4 +89,4 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # Compiler Optimizations
 # ===========================
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
-CONFIG_COMPILER_OPTIMIZATION_LEVEL_RELEASE=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hotpin Voice Test Client</title>
+    <title>Hotpin Press-to-Talk Client</title>
     <style>
         * {
             margin: 0;
@@ -274,7 +274,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🎙️ Hotpin Full Voice Test</h1>
+        <h1>🎙️ Hotpin Press-to-Talk Client</h1>
         <p class="subtitle">Press and hold to talk, release to process speech</p>
         
         <div id="statusCard" class="status-card disconnected">
@@ -310,15 +310,16 @@
         
         <div class="input-group">
             <label for="sessionId">Session ID:</label>
-            <input type="text" id="sessionId" value="voice-test-session" 
-                   placeholder="voice-test-session">
+            <input type="text" id="sessionId" value="press-talk-session" 
+                   placeholder="press-talk-session">
         </div>
         
         <div class="controls">
             <button id="connectBtn" class="btn-primary" onclick="connect()">
                 🔌 Connect to Server
             </button>
-            <!-- Updated to press-and-hold functionality -->
+            
+            <!-- Press-to-talk button -->
             <button id="talkBtn" class="btn-success" disabled 
                     onmousedown="handleTalkStart()" 
                     onmouseup="handleTalkEnd()" 
@@ -328,6 +329,7 @@
                     ontouchcancel="handleTalkEnd()">
                 🎤 Hold to Talk
             </button>
+            
             <button id="disconnectBtn" class="btn-warning" onclick="disconnect()" disabled>
                 ❌ Disconnect
             </button>
@@ -353,6 +355,9 @@
         let audioChunks = [];
         let audioWorkletNode = null;
         let sourceNode = null;
+
+        // Press-to-talk variables
+        let pressStartTime = null;
 
         function updateStatus(icon, title, description, className) {
             const card = document.getElementById('statusCard');
@@ -479,9 +484,6 @@
                 updateStatus('❌', 'Error', 'Connection failed', 'disconnected');
             }
         }
-
-        // Press-to-talk variables
-        let pressStartTime = null;
 
         async function startRecording() {
             if (isRecording) return;
@@ -626,106 +628,6 @@
             }
         }
 
-        async function startRecording() {
-            try {
-                // Request microphone access
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: {
-                        channelCount: 1,
-                        sampleRate: 16000,
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    } 
-                });
-
-                // Create audio context
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 16000
-                });
-
-                sourceNode = audioContext.createMediaStreamSource(stream);
-                
-                // Create ScriptProcessor for audio processing
-                const bufferSize = 4096;
-                const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-                
-                audioChunks = [];
-                
-                processor.onaudioprocess = (e) => {
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    // Convert float32 to int16 PCM
-                    const pcmData = new Int16Array(inputData.length);
-                    for (let i = 0; i < inputData.length; i++) {
-                        const s = Math.max(-1, Math.min(1, inputData[i]));
-                        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                    }
-                    audioChunks.push(new Uint8Array(pcmData.buffer));
-                };
-                
-                sourceNode.connect(processor);
-                processor.connect(audioContext.destination);
-                
-                // Store for cleanup
-                window.audioProcessor = processor;
-                window.mediaStream = stream;
-                
-                isRecording = true;
-                updateButtons();
-                updateStatus('🔴', 'Recording...', 'Speak now! Click Stop when done', 'recording');
-                addMessage('system', 'System', '🎤 Recording started - speak clearly');
-
-            } catch (error) {
-                addMessage('system', 'Error', `Microphone access denied: ${error.message}`);
-                alert('Please allow microphone access to use voice recording');
-            }
-        }
-
-        function stopRecording() {
-            if (!isRecording) return;
-
-            isRecording = false;
-            updateButtons();
-            updateStatus('⏳', 'Processing...', 'Sending audio to server', 'processing');
-            addMessage('system', 'System', '⏹️ Recording stopped - processing...');
-
-            // Stop audio processing
-            if (window.audioProcessor) {
-                window.audioProcessor.disconnect();
-            }
-            if (sourceNode) {
-                sourceNode.disconnect();
-            }
-            if (window.mediaStream) {
-                window.mediaStream.getTracks().forEach(track => track.stop());
-            }
-            if (audioContext) {
-                audioContext.close();
-            }
-
-            // Combine all PCM chunks
-            const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-            const pcmData = new Uint8Array(totalLength);
-            let offset = 0;
-            for (const chunk of audioChunks) {
-                pcmData.set(chunk, offset);
-                offset += chunk.length;
-            }
-
-            // Send PCM data to server
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(pcmData.buffer);
-                addMessage('system', 'System', `📤 Sent ${pcmData.length} bytes of audio`);
-                
-                // Send EOS signal
-                setTimeout(() => {
-                    ws.send(JSON.stringify({ signal: 'EOS' }));
-                    addMessage('system', 'System', '📡 Processing your speech...');
-                }, 100);
-            }
-
-            audioChunks = [];
-        }
-
         async function playAudioChunks(chunks) {
             try {
                 // Combine all chunks into a single Blob
@@ -784,9 +686,9 @@
         }
 
         // Initial message
-        addMessage('system', 'System', '👋 Welcome to Hotpin Voice Test Client!');
-        addMessage('system', 'System', '📱 Click anywhere on the page to enable audio autoplay');
-        
+        addMessage('system', 'System', '👋 Welcome to Hotpin Press-to-Talk Client!');
+        addMessage('system', 'System', '📱 Press and hold the button to talk, release to process speech');
+
         // Add click handler to enable autoplay (required by most browsers)
         document.body.addEventListener('click', () => {
             addMessage('system', 'System', '✓ Audio autoplay enabled');

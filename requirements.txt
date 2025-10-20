@@ -8,3 +8,4 @@ groq
 httpx
 pydantic
 multipart
+nltk

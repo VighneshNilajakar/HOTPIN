@@ -35,7 +35,7 @@ def initialize_vosk_model() -> None:
     
     print(f"Loading Vosk model from: {VOSK_MODEL_PATH}")
     VOSK_MODEL = Model(VOSK_MODEL_PATH)
-    print(f"✓ Vosk model loaded successfully")
+    print(f"Vosk model loaded successfully")
 
 
 def create_wav_header(pcm_data: bytes, sample_rate: int = 16000, 
@@ -138,14 +138,14 @@ def process_audio_for_transcription(session_id: str, pcm_bytes: bytes) -> str:
             transcript = final_result.get("text", "")
             
             if transcript:
-                print(f"✓ Transcription [{session_id}]: \"{transcript}\"")
+                print(f"Transcription [{session_id}]: \"{transcript}\"")
             else:
-                print(f"⚠ Empty transcription for session: {session_id}")
+                print(f"Empty transcription for session: {session_id}")
             
             return transcript
     
     except Exception as e:
-        print(f"✗ Transcription error [{session_id}]: {e}")
+        print(f"Transcription error [{session_id}]: {e}")
         # Return empty string on error rather than raising
         # This allows the conversation flow to continue
         return ""

@@ -44,9 +44,9 @@ static bool s_tts_playback_active = false;
 extern SemaphoreHandle_t g_i2s_config_mutex;
 
 // Task handles for coordination
-static TaskHandle_t camera_task_handle = NULL;
-static TaskHandle_t stt_task_handle = NULL;
-static TaskHandle_t tts_task_handle = NULL;
+// static TaskHandle_t camera_task_handle = NULL;  // Not currently used
+// static TaskHandle_t stt_task_handle = NULL;     // Not currently used
+// static TaskHandle_t tts_task_handle = NULL;     // Not currently used
 
 // Transition timeout
 #define STATE_TRANSITION_TIMEOUT_MS    5000
@@ -592,7 +592,8 @@ static void wait_for_voice_pipeline_shutdown(void) {
         bool tts_drained = false;
         
         while (!tts_drained) {
-            esp_err_t wait_ret = tts_decoder_wait_for_idle(pdMS_TO_TICKS(100));
+            // Wait for TTS decoder to become idle
+            tts_decoder_wait_for_idle(pdMS_TO_TICKS(100));
             websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
             bool pipeline_still_active = websocket_client_is_pipeline_active();
             

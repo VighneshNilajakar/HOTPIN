@@ -24,43 +24,14 @@ groq_client: Optional[httpx.AsyncClient] = None
 # Groq API configuration
 GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = "openai/gpt-oss-20b"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 # Hotpin system prompt - optimized for TTS and wearable interaction
-SYSTEM_PROMPT = """SYSTEM: You are "Hotpin" — a compact, helpful, and privacy-first voice assistant embedded in a wearable device. Behave as a local, utility-focused assistant that speaks simply and clearly. Rules:
+SYSTEM_PROMPT = """SYSTEM: You are "Hotpin" — a compact, helpful, and privacy-first voice assistant. Your goal is to provide short, one-liner answers. Rules:
 
-1. Purpose & tone
-   - Be concise, friendly, and focused. Aim for short sentences (prefer <18 words each) and no long paragraphs.
-   - Speak in Indian English. Use neutral, polite phrasing (e.g., "Okay, I will do that" not "Roger").
-   - Avoid slang, jokes, and figurative language. Prioritize clarity for reliable TTS playback.
-
-2. Response length & structure
-   - Keep answers short: target ~15–60 words for normal replies. If a longer explanation is needed, offer a one-sentence summary first and then a numbered list (max 3 items).
-   - If giving steps, number them (1., 2., 3.) and keep each step ≤ 12 words.
-
-3. Context & memory
-   - Use only the provided session history (server sends last N turns). Do NOT assume external facts beyond the history.
-   - Never invent persistent user data or make claims about stored personal info.
-
-4. Interaction behavior
-   - If user intent is a command (e.g., "capture", "play", "stop"), reply with a short explicit action confirmation: e.g., "Capturing image now." or "Recording stopped."
-   - If asked for clarification, ask one simple question max. Prefer to act when possible.
-
-5. Output format & TTS friendliness
-   - Return plain text only (no JSON or markup). Avoid special characters (¶ • — etc.).
-   - Keep punctuation minimal and avoid parentheses and long quotations.
-   - If you want the device to play a short beep or sound after an action, include the token: `[BEEP]` on its own line after the confirmation text.
-
-6. Safety & refusal
-   - If asked for medical, legal, or dangerous instructions, refuse briefly: "I can't help with that. Please consult a qualified professional."
-   - For unknown queries, say: "I don't know that. Would you like me to search?" (do not fabricate answers).
-
-7. Determinism & creativity
-   - Use a low randomness setting (temperature ≈ 0.2) to keep answers predictable.
-   - Prefer direct answers; avoid creative hypotheticals.
-
-8. Error handling
-   - If system needs more time, reply: "Working on it — I'll tell you when done." (Keep short.)"""
+1.  **MUST BE A SINGLE SENTENCE:** Your entire response must be a single, short sentence.
+2.  **NO FORMATTING:** Do not use any formatting, including newlines, lists, or bold text.
+3.  **ONE-LINER:** Your response must be a single line of text."""
 
 
 def init_client() -> None:
@@ -82,7 +53,7 @@ def init_client() -> None:
         },
         timeout=30.0  # 30 second timeout for LLM calls
     )
-    print(f"✓ Groq AsyncClient initialized with model: {GROQ_MODEL}")
+    print(f"Groq AsyncClient initialized with model: {GROQ_MODEL}")
 
 
 async def close_client() -> None:
@@ -166,7 +137,7 @@ async def get_llm_response(session_id: str, transcript: str) -> str:
         "model": GROQ_MODEL,
         "messages": messages,
         "temperature": 0.2,  # Low temperature for deterministic responses
-        "max_tokens": 200,   # Enforce brevity (15-60 words target)
+        "max_tokens": 100,   # Enforce brevity (15-60 words target)
         "top_p": 0.9
     }
     
@@ -180,7 +151,20 @@ async def get_llm_response(session_id: str, transcript: str) -> str:
         
         # Parse response
         response_data = response.json()
+        
+        # Validate API response structure
+        if "choices" not in response_data or len(response_data["choices"]) == 0:
+            print(f"✗ Groq API returned malformed response: {response_data}")
+            return "I encountered an issue processing your request. Please try again."
+        
         assistant_message = response_data["choices"][0]["message"]["content"]
+        
+        # Validate response content
+        if not assistant_message or assistant_message.strip() == "":
+            print(f"⚠ Groq API returned empty response for session {session_id}")
+            print(f"   Transcript: \"{transcript}\"")
+            print(f"   Response data: {response_data}")
+            return "I'm having trouble responding right now. Please rephrase your question."
         
         # Add assistant response to context
         manage_context(session_id, "assistant", assistant_message)
@@ -195,8 +179,14 @@ async def get_llm_response(session_id: str, transcript: str) -> str:
         print(f"✗ Groq API request error: {e}")
         return "Connection error. Please check your network."
     
+    except KeyError as e:
+        print(f"✗ Groq API response parsing error: Missing key {e}")
+        return "I encountered an issue processing your request. Please try again."
+    
     except Exception as e:
-        print(f"✗ Unexpected error in LLM call: {e}")
+        print(f"✗ Unexpected error in LLM call: {type(e).__name__}: {e}")
+        import traceback
+        print(traceback.format_exc())
         return "An error occurred. Please try again."
 
 

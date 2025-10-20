@@ -445,7 +445,6 @@ static void audio_capture_task(void *pvParameters) {
     uint32_t total_bytes_captured = 0;
     uint32_t read_count = 0;
     uint32_t error_count = 0;
-    int64_t first_read_time = 0;
     
     // CANARY: Static counter for continuous health monitoring
     static uint32_t alive_counter = 0;
@@ -472,7 +471,6 @@ static void audio_capture_task(void *pvParameters) {
         
         // Log first read with minimal diagnostics to prevent InstructionFetchError
         if (read_count == 1) {
-            first_read_time = esp_timer_get_time() / 1000;
             ESP_LOGD(TAG, "[FIRST READ] Completed: %zu bytes, duration: %lld ms", bytes_read, (long long)read_duration);
             
             // CRITICAL: Small delay for cache coherency after DMA transfer
