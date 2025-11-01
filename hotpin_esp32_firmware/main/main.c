@@ -4,7 +4,7 @@
  * 
  * Critical initialization sequence:
  * 1. Disable brownout detector
- * 2. GPIO 4 LED control (PREVENTS GHOST FLASH)
+ * 2. GPIO 12 button input configuration (AVOIDS STRAPPING PIN CONFLICTS)
  * 3. PSRAM validation
  * 4. NVS and WiFi initialization
  * 5. Mutex and queue creation
@@ -110,8 +110,8 @@ void app_main(void) {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     ESP_LOGW(TAG, "Brownout detector disabled");
     
-    // NOTE: GPIO 4 is used for button input - configured in button_handler_init()
-    // Flash LED on GPIO4 is NOT controlled to avoid conflicts with button
+    // NOTE: GPIO 12 is used for button input - configured in button_handler_init()
+    // Flash LED on GPIO12 is NOT controlled to avoid conflicts with button
     
     // Validate PSRAM availability
     if (validate_psram() != ESP_OK) {
@@ -207,6 +207,15 @@ void app_main(void) {
     
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create state manager task");
+        // Clean up synchronization primitives before restarting
+        if (g_i2s_config_mutex) {
+            vSemaphoreDelete(g_i2s_config_mutex);
+            g_i2s_config_mutex = NULL;
+        }
+        if (g_network_event_group) {
+            vEventGroupDelete(g_network_event_group);
+            g_network_event_group = NULL;
+        }
         esp_restart();
     }
     
@@ -225,6 +234,19 @@ void app_main(void) {
     
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create WebSocket connection task");
+        // Clean up resources before restarting
+        if (g_state_manager_task_handle) {
+            vTaskDelete(g_state_manager_task_handle);
+            g_state_manager_task_handle = NULL;
+        }
+        if (g_i2s_config_mutex) {
+            vSemaphoreDelete(g_i2s_config_mutex);
+            g_i2s_config_mutex = NULL;
+        }
+        if (g_network_event_group) {
+            vEventGroupDelete(g_network_event_group);
+            g_network_event_group = NULL;
+        }
         esp_restart();
     }
     
@@ -288,9 +310,9 @@ void app_main(void) {
 // ===========================
 
 // REMOVED: critical_gpio_init() function
-// GPIO4 is used ONLY as button input (configured in button_handler_init)
-// The onboard flash LED on GPIO4 may flicker but this is acceptable
-// to maintain button functionality
+// GPIO12 is used ONLY as button input (configured in button_handler_init)
+// Note: GPIO12 is a strapping pin - ensure proper external pull-up/pull-down
+// for reliable boot behavior
 
 static esp_err_t validate_psram(void) {
     ESP_LOGI(TAG, "Validating PSRAM...");

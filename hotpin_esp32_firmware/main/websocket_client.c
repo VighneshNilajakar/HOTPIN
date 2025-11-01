@@ -21,6 +21,7 @@
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "cJSON.h"
+#include "inttypes.h"
 #include <string.h>
 
 static const char *TAG = TAG_WEBSOCKET;
@@ -33,6 +34,8 @@ static bool is_started = false;
 static char server_uri[128] = {0};
 static volatile websocket_pipeline_stage_t g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
 static volatile bool g_session_ready = false;
+static uint32_t s_reconnect_attempt_count = 0;
+static uint32_t s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS;
 
 // Callback function pointer for incoming WAV audio data
 static websocket_audio_callback_t g_audio_callback = NULL;
@@ -52,6 +55,7 @@ static void handle_binary_message(const uint8_t *data, size_t len);
 static void update_pipeline_stage(const char *status, const char *stage);
 static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage);
 static void post_pipeline_stage_event(websocket_pipeline_stage_t stage);
+static void websocket_health_check_task(void *pvParameters);
 
 // ===========================
 // Public Functions
@@ -131,14 +135,17 @@ esp_err_t websocket_client_deinit(void) {
         websocket_client_disconnect();
     }
     
+    // Force stop the client to ensure proper cleanup
+    websocket_client_force_stop();
+    
     // Destroy client
     if (g_ws_client != NULL) {
         esp_err_t ret = esp_websocket_client_destroy(g_ws_client);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to destroy WebSocket client: %s", esp_err_to_name(ret));
-            return ret;
+            // Don't return error here as we want to continue cleanup
         }
-        g_ws_client = NULL;
+        g_ws_client = NULL;  // Set to NULL to prevent double-free
     }
     
     is_connected = false;
@@ -173,12 +180,35 @@ esp_err_t websocket_client_connect(void) {
         is_started = false;
     }
     
+    // Implement exponential backoff with jitter for reconnections
+    if (s_reconnect_attempt_count > 0) {
+        // Calculate next delay: base delay * 2^(attempt count), with max and jitter
+        uint32_t next_delay = s_last_reconnect_delay;
+        if (next_delay < 30000) { // Max 30 seconds
+            next_delay = (s_last_reconnect_delay * 2 < 30000) ? s_last_reconnect_delay * 2 : 30000;
+        }
+        
+        // Add jitter to prevent thundering herd effect
+        uint32_t jitter = esp_random() % (next_delay / 4); // Add up to 25% jitter
+        uint32_t final_delay = next_delay + jitter;
+        
+        ESP_LOGI(TAG, "Reconnect attempt %u, waiting %u ms (with jitter)", 
+                 (unsigned int)s_reconnect_attempt_count, (unsigned int)final_delay);
+        
+        vTaskDelay(pdMS_TO_TICKS(final_delay));
+        
+        s_last_reconnect_delay = next_delay;
+    }
+    
     esp_err_t ret = esp_websocket_client_start(g_ws_client);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start WebSocket client: %s", esp_err_to_name(ret));
+        s_reconnect_attempt_count++; // Increment attempt counter on failure
+        ESP_LOGE(TAG, "Failed to start WebSocket client: %s (attempt %u)", 
+                 esp_err_to_name(ret), (unsigned int)s_reconnect_attempt_count);
         return ret;
     }
     
+    s_reconnect_attempt_count = 0; // Reset counter on successful connection
     ESP_LOGI(TAG, "WebSocket client started");
     is_started = true;
     return ESP_OK;
@@ -219,6 +249,7 @@ esp_err_t websocket_client_disconnect(void) {
     is_connected = false;
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     g_session_ready = false;
+    s_reconnect_attempt_count = 0; // Reset reconnect counter on explicit disconnect
     ESP_LOGI(TAG, "WebSocket disconnected");
     
     return ESP_OK;
@@ -297,8 +328,16 @@ esp_err_t websocket_client_send_handshake(void) {
 }
 
 esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32_t timeout_ms) {
-    if (!is_connected) {
+    // CRITICAL: Validate connection before sending
+    if (!is_connected || g_ws_client == NULL) {
         ESP_LOGE(TAG, "Cannot send audio - not connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    // Additional validation to ensure connection is still alive
+    if (!esp_websocket_client_is_connected(g_ws_client)) {
+        ESP_LOGE(TAG, "WebSocket connection lost - cannot send audio");
+        is_connected = false;
         return ESP_ERR_INVALID_STATE;
     }
     
@@ -319,14 +358,48 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32
         }
     }
 
-    int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, ticks_to_wait);
-    if (ret < 0) {
-        ESP_LOGE(TAG, "Failed to send audio chunk (%zu bytes)", length);
-        return ESP_FAIL;
+    // Implement exponential backoff for retries on send failures
+    static uint32_t send_failure_count = 0;
+    const uint32_t max_retries = 3;
+    esp_err_t last_error = ESP_OK;
+    
+    for (uint32_t attempt = 0; attempt <= max_retries; attempt++) {
+        // Re-check connection status before each send attempt
+        if (!esp_websocket_client_is_connected(g_ws_client)) {
+            ESP_LOGE(TAG, "WebSocket connection lost before send attempt %u", (unsigned int)(attempt + 1));
+            is_connected = false;
+            return ESP_ERR_INVALID_STATE;
+        }
+        
+        int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, ticks_to_wait);
+        if (ret >= 0) {
+            // Success - reset failure counter
+            send_failure_count = 0;
+            ESP_LOGD(TAG, "Sent %zu bytes of audio data", length);
+            return ESP_OK;
+        }
+        
+        last_error = ESP_FAIL;
+        send_failure_count++;
+        
+        if (attempt < max_retries) {
+            ESP_LOGW(TAG, "WebSocket send attempt %u failed (%d), retrying...", 
+                     (unsigned int)(attempt + 1), ret);
+            // Exponential backoff: 50ms, 100ms, 200ms
+            vTaskDelay(pdMS_TO_TICKS(50 * (1 << attempt)));
+            
+            // Re-check connection status after delay
+            if (!esp_websocket_client_is_connected(g_ws_client)) {
+                ESP_LOGE(TAG, "WebSocket connection lost during retry");
+                is_connected = false;
+                return ESP_ERR_INVALID_STATE;
+            }
+        }
     }
     
-    ESP_LOGD(TAG, "Sent %zu bytes of audio data", length);
-    return ESP_OK;
+    ESP_LOGE(TAG, "Failed to send audio chunk (%zu bytes) after %u attempts", 
+             length, (unsigned int)(max_retries + 1));
+    return last_error;
 }
 
 esp_err_t websocket_client_send_text(const char *message) {
@@ -461,6 +534,7 @@ static void handle_text_message(const char *data, size_t len) {
     
     cJSON *root = cJSON_Parse(json_str);
     free(json_str);
+    json_str = NULL;  // Set to NULL after freeing to prevent double-free
     
     if (root == NULL) {
         ESP_LOGE(TAG, "Failed to parse JSON");
@@ -623,3 +697,5 @@ bool websocket_client_is_pipeline_active(void) {
 const char *websocket_client_pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
     return pipeline_stage_to_string(stage);
 }
+
+

@@ -110,6 +110,7 @@ esp_err_t button_handler_init(void) {
         ret = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
         if (ret == ESP_OK) {
             s_isr_service_installed = true;
+            ESP_LOGI(TAG, "GPIO ISR service installed successfully");
         } else if (ret == ESP_ERR_INVALID_STATE) {
             ESP_LOGW(TAG, "GPIO ISR service already installed (shared)" );
             s_isr_service_installed = true;

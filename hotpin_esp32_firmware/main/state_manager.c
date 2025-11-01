@@ -30,6 +30,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "inttypes.h"
 
 static const char *TAG = TAG_STATE_MGR;
 static system_state_t current_state = SYSTEM_STATE_INIT;
@@ -77,6 +78,7 @@ static bool guardrails_is_pipeline_busy(void);
 static bool guardrails_should_block_button(button_event_type_t type);
 static bool guardrails_should_block_capture(void);
 static void guardrails_signal_block(const char *reason);
+static bool is_voice_pipeline_active(void);
 
 // ===========================
 // Public Functions
@@ -210,12 +212,16 @@ system_state_t state_manager_get_state(void) {
     return current_state;
 }
 
-static bool guardrails_is_pipeline_busy(void) {
+static bool is_voice_pipeline_active(void) {
     return websocket_client_is_pipeline_active() ||
            (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS) ||
            (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_LLM) ||
            (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION) ||
            s_tts_playback_active;
+}
+
+static bool guardrails_is_pipeline_busy(void) {
+    return is_voice_pipeline_active();
 }
 
 static void guardrails_signal_block(const char *reason) {
@@ -552,7 +558,7 @@ static void wait_for_voice_pipeline_shutdown(void) {
     }
 
     const TickType_t overall_start = xTaskGetTickCount();
-    const TickType_t overall_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_WAIT_MS);
+    const TickType_t overall_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_WAIT_MS * 2); // Doubled timeout for more stability
 
     while (true) {
         websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
@@ -572,7 +578,7 @@ static void wait_for_voice_pipeline_shutdown(void) {
         if ((xTaskGetTickCount() - overall_start) >= overall_timeout) {
             ESP_LOGW(TAG, "Voice pipeline still active (%s) after %u ms",
                      websocket_client_pipeline_stage_to_string(stage),
-                     (unsigned int)VOICE_PIPELINE_STAGE_WAIT_MS);
+                     (unsigned int)(VOICE_PIPELINE_STAGE_WAIT_MS * 2));
             break;
         }
 
@@ -584,14 +590,14 @@ static void wait_for_voice_pipeline_shutdown(void) {
     if (tts_decoder_has_pending_audio() || s_tts_playback_active) {
         size_t pending_bytes = tts_decoder_get_pending_bytes();
         ESP_LOGI(TAG, "Waiting for TTS playback drain (~%zu bytes pending, timeout %u ms)",
-                 pending_bytes, (unsigned int)VOICE_TTS_FLUSH_WAIT_MS);
+                 pending_bytes, (unsigned int)(VOICE_TTS_FLUSH_WAIT_MS * 2)); // Doubled timeout
 
         // Wait in smaller increments and check for state changes
         const TickType_t tts_start = xTaskGetTickCount();
-        const TickType_t tts_timeout = pdMS_TO_TICKS(VOICE_TTS_FLUSH_WAIT_MS);
-        bool tts_drained = false;
+        const TickType_t tts_timeout = pdMS_TO_TICKS(VOICE_TTS_FLUSH_WAIT_MS * 2); // Doubled timeout
+        uint32_t drain_checks = 0;
         
-        while (!tts_drained) {
+        while (true) {
             // Wait for TTS decoder to become idle
             tts_decoder_wait_for_idle(pdMS_TO_TICKS(100));
             websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
@@ -599,14 +605,15 @@ static void wait_for_voice_pipeline_shutdown(void) {
             
             // Check if TTS has completed or if there's no more pending audio
             if (!tts_decoder_has_pending_audio() && !s_tts_playback_active) {
-                tts_drained = true;
-                ESP_LOGI(TAG, "TTS playback drained successfully");
+                ESP_LOGI(TAG, "TTS playback drained successfully after %u checks", (unsigned int)drain_checks);
                 break;
             }
             
             // Check for timeout
             if ((xTaskGetTickCount() - tts_start) >= tts_timeout) {
-                ESP_LOGW(TAG, "TTS playback drain timed out; proceeding with shutdown");
+                ESP_LOGW(TAG, "TTS playback drain timed out after %u checks; forcing shutdown", (unsigned int)drain_checks);
+                // CRITICAL: Force stop TTS decoder to prevent hanging
+                tts_decoder_stop();
                 break;
             }
             
@@ -614,13 +621,16 @@ static void wait_for_voice_pipeline_shutdown(void) {
             if (current_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE && 
                 !pipeline_still_active && 
                 !tts_decoder_has_pending_audio()) {
-                tts_drained = true;
-                ESP_LOGI(TAG, "TTS drain complete - pipeline finished");
+                ESP_LOGI(TAG, "TTS drain complete - pipeline finished after %u checks", (unsigned int)drain_checks);
                 break;
             }
             
+            drain_checks++;
             esp_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
+    } else {
+        ESP_LOGI(TAG, "TTS playback already drained - no pending audio");
     }
 }
 
@@ -667,6 +677,8 @@ static esp_err_t transition_to_camera_mode(void) {
             xSemaphoreGive(g_i2s_config_mutex);
             return ret;
         }
+        // Ensure audio driver state is updated after deinit
+        vTaskDelay(pdMS_TO_TICKS(50));  // Brief stabilization delay
     } else {
         ESP_LOGI(TAG, "Audio drivers already inactive; skipping deinit");
     }
@@ -883,7 +895,7 @@ static esp_err_t transition_to_voice_mode(void) {
         return ESP_ERR_TIMEOUT;
     }
     int64_t mutex_time = (esp_timer_get_time() - mutex_start) / 1000;
-    ESP_LOGI(TAG, "  ✓ Mutex acquired (took %lld ms)", (long long)mutex_time);
+    ESP_LOGI(TAG, "  ✓ Mutex acquired (took %"PRIu32" ms)", (uint32_t)mutex_time);
     
     // Step 3: Deinitialize camera
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════");
@@ -897,12 +909,12 @@ static esp_err_t transition_to_voice_mode(void) {
     int64_t cam_deinit_time = (esp_timer_get_time() - cam_deinit_start) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ Failed to deinit camera: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)cam_deinit_time);
+        ESP_LOGE(TAG, "❌ Failed to deinit camera: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)cam_deinit_time);
         xSemaphoreGive(g_i2s_config_mutex);
         return ret;
     }
-    ESP_LOGI(TAG, "  ✓ Camera deinitialized (took %lld ms)", (long long)cam_deinit_time);
+    ESP_LOGI(TAG, "  ✓ Camera deinitialized (took %"PRIu32" ms)", (uint32_t)cam_deinit_time);
     ESP_LOGI(TAG, "  Free heap after: %u bytes", (unsigned int)esp_get_free_heap_size());
     ESP_LOGI(TAG, "  Free PSRAM after: %u bytes", (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     
@@ -933,8 +945,8 @@ static esp_err_t transition_to_voice_mode(void) {
     int64_t audio_init_time = (esp_timer_get_time() - audio_init_start) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ Failed to init audio: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)audio_init_time);
+        ESP_LOGE(TAG, "❌ Failed to init audio: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)audio_init_time);
         ESP_LOGE(TAG, "  Free heap at failure: %u bytes", (unsigned int)esp_get_free_heap_size());
         
         // Attempt recovery: reinitialize camera
@@ -944,18 +956,18 @@ static esp_err_t transition_to_voice_mode(void) {
         xSemaphoreGive(g_i2s_config_mutex);
         return ret;
     }
-    ESP_LOGI(TAG, "  ✓ Audio initialized (took %lld ms)", (long long)audio_init_time);
+    ESP_LOGI(TAG, "  ✓ Audio initialized (took %"PRIu32" ms)", (uint32_t)audio_init_time);
     ESP_LOGI(TAG, "  Free heap after: %u bytes", (unsigned int)esp_get_free_heap_size());
     
     // Step 5: Release I2S mutex
     xSemaphoreGive(g_i2s_config_mutex);
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ STEP 5: I2S mutex released");
-    ESP_LOGI(TAG, "║ Total transition time: %lld ms", 
-             (long long)(mutex_time + cam_deinit_time + 250 + audio_init_time));
+    ESP_LOGI(TAG, "║ Total transition time: %"PRIu32" ms", 
+             (uint32_t)(mutex_time + cam_deinit_time + 250 + audio_init_time));
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
     
-    // Step 6: Start STT and TTS pipelines
+    // Step 6: Start STT and TTS pipelines with additional error handling
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════");
     ESP_LOGI(TAG, "║ STEP 6: Starting STT/TTS pipelines");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
@@ -972,6 +984,9 @@ static esp_err_t transition_to_voice_mode(void) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start TTS decoder: %s", esp_err_to_name(ret));
     }
+    
+    // Add safety delay to allow pipeline initialization
+    vTaskDelay(pdMS_TO_TICKS(50));
     
     esp_err_t start_sound_ret = feedback_player_play(FEEDBACK_SOUND_REC_START);
     if (start_sound_ret != ESP_OK) {

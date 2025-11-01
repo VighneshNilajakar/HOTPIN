@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <limits.h>
+#include "inttypes.h"
 
 #define I2S_DMA_FRAME_MAX 1023U
 #define WRITE_DEBUG_LOG_LIMIT 8U
@@ -54,6 +55,8 @@ static esp_err_t configure_i2s_std_full_duplex(void);
 // ===========================
 // Public Functions
 // ===========================
+
+
 
 esp_err_t audio_driver_init(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
@@ -107,89 +110,100 @@ esp_err_t audio_driver_deinit(void) {
         return ESP_OK;
     }
     
-    esp_err_t ret = ESP_OK;
-    int64_t start_time;
-    
-    // Step 1: Disable RX channel
-    if (g_i2s_rx_handle != NULL) {
-        ESP_LOGI(TAG, "[STEP 1/5] Disabling RX (microphone) channel...");
-        start_time = esp_timer_get_time();
-        ret = i2s_channel_disable(g_i2s_rx_handle);
-        int64_t disable_time = (esp_timer_get_time() - start_time) / 1000;
+    // Try to acquire mutex before deinit to prevent conflicts
+    if (g_i2s_access_mutex != NULL && xSemaphoreTake(g_i2s_access_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        esp_err_t ret = ESP_OK;
+        int64_t start_time;
         
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "⚠ RX channel disable returned: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)disable_time);
-        } else {
-            ESP_LOGI(TAG, "✅ RX channel disabled (took %lld ms)", (long long)disable_time);
+        // Step 1: Disable RX channel
+        if (g_i2s_rx_handle != NULL) {
+            ESP_LOGI(TAG, "[STEP 1/5] Disabling RX (microphone) channel...");
+            start_time = esp_timer_get_time();
+            ret = i2s_channel_disable(g_i2s_rx_handle);
+            int64_t disable_time = (esp_timer_get_time() - start_time) / 1000;
+            
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "⚠ RX channel disable returned: %s (took %"PRIu32" ms)", 
+                         esp_err_to_name(ret), (uint32_t)disable_time);
+            } else {
+                ESP_LOGI(TAG, "✅ RX channel disabled (took %"PRIu32" ms)", (uint32_t)disable_time);
+            }
         }
-    }
-    
-    // Step 2: Disable TX channel
-    if (g_i2s_tx_handle != NULL) {
-        ESP_LOGI(TAG, "[STEP 2/5] Disabling TX (speaker) channel...");
-        start_time = esp_timer_get_time();
-        ret = i2s_channel_disable(g_i2s_tx_handle);
-        int64_t disable_time = (esp_timer_get_time() - start_time) / 1000;
         
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "⚠ TX channel disable returned: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)disable_time);
-        } else {
-            ESP_LOGI(TAG, "✅ TX channel disabled (took %lld ms)", (long long)disable_time);
+        // Step 2: Disable TX channel
+        if (g_i2s_tx_handle != NULL) {
+            ESP_LOGI(TAG, "[STEP 2/5] Disabling TX (speaker) channel...");
+            start_time = esp_timer_get_time();
+            ret = i2s_channel_disable(g_i2s_tx_handle);
+            int64_t disable_time = (esp_timer_get_time() - start_time) / 1000;
+            
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "⚠ TX channel disable returned: %s (took %"PRIu32" ms)", 
+                         esp_err_to_name(ret), (uint32_t)disable_time);
+            } else {
+                ESP_LOGI(TAG, "✅ TX channel disabled (took %"PRIu32" ms)", (uint32_t)disable_time);
+            }
         }
-    }
-    
-    // Step 3: Allow DMA operations to complete
-    ESP_LOGI(TAG, "[STEP 3/5] Waiting for DMA completion (50ms)...");
-    vTaskDelay(pdMS_TO_TICKS(50));
-    
-    // Step 4: Delete RX channel
-    if (g_i2s_rx_handle != NULL) {
-        ESP_LOGI(TAG, "[STEP 4/5] Deleting RX channel...");
-        start_time = esp_timer_get_time();
-        ret = i2s_del_channel(g_i2s_rx_handle);
-        int64_t del_time = (esp_timer_get_time() - start_time) / 1000;
         
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "❌ RX channel deletion FAILED: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)del_time);
-        } else {
-            ESP_LOGI(TAG, "✅ RX channel deleted (took %lld ms)", (long long)del_time);
-            g_i2s_rx_handle = NULL;
-        }
-    }
-    
-    // Step 5: Delete TX channel
-    if (g_i2s_tx_handle != NULL) {
-        ESP_LOGI(TAG, "[STEP 5/5] Deleting TX channel...");
-        start_time = esp_timer_get_time();
-        ret = i2s_del_channel(g_i2s_tx_handle);
-        int64_t del_time = (esp_timer_get_time() - start_time) / 1000;
+        // Step 3: Allow DMA operations to complete
+        ESP_LOGI(TAG, "[STEP 3/5] Waiting for DMA completion (50ms)...");
+        vTaskDelay(pdMS_TO_TICKS(50));
         
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "❌ TX channel deletion FAILED: %s (took %lld ms)", 
-                     esp_err_to_name(ret), (long long)del_time);
-        } else {
-            ESP_LOGI(TAG, "✅ TX channel deleted (took %lld ms)", (long long)del_time);
-            g_i2s_tx_handle = NULL;
+        // Step 4: Delete RX channel
+        if (g_i2s_rx_handle != NULL) {
+            ESP_LOGI(TAG, "[STEP 4/5] Deleting RX channel...");
+            start_time = esp_timer_get_time();
+            ret = i2s_del_channel(g_i2s_rx_handle);
+            int64_t del_time = (esp_timer_get_time() - start_time) / 1000;
+            
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "❌ RX channel deletion FAILED: %s (took %"PRIu32" ms)", 
+                         esp_err_to_name(ret), (uint32_t)del_time);
+            } else {
+                ESP_LOGI(TAG, "✅ RX channel deleted (took %"PRIu32" ms)", (uint32_t)del_time);
+                g_i2s_rx_handle = NULL;  // Explicitly set to NULL after deletion
+            }
         }
+        
+        // Step 5: Delete TX channel
+        if (g_i2s_tx_handle != NULL) {
+            ESP_LOGI(TAG, "[STEP 5/5] Deleting TX channel...");
+            start_time = esp_timer_get_time();
+            ret = i2s_del_channel(g_i2s_tx_handle);
+            int64_t del_time = (esp_timer_get_time() - start_time) / 1000;
+            
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "❌ TX channel deletion FAILED: %s (took %"PRIu32" ms)", 
+                         esp_err_to_name(ret), (uint32_t)del_time);
+            } else {
+                ESP_LOGI(TAG, "✅ TX channel deleted (took %"PRIu32" ms)", (uint32_t)del_time);
+                g_i2s_tx_handle = NULL;  // Explicitly set to NULL after deletion
+            }
+        }
+        
+        // Additional delay to ensure interrupt controller and GPIO matrix settle
+        ESP_LOGI(TAG, "Additional settling time (50ms) for interrupt/GPIO matrix...");
+        vTaskDelay(pdMS_TO_TICKS(50));
+        
+        xSemaphoreGive(g_i2s_access_mutex);
+        
+        // Mark as uninitialized
+        is_initialized = false;
+        current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
+        
+        ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
+        ESP_LOGI(TAG, "║ ✅ Modern I2S STD Driver Deinitialized");
+        ESP_LOGI(TAG, "║ Camera Can Now Initialize");
+        ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
+        
+        return ret;
+    } else {
+        ESP_LOGW(TAG, "Could not acquire mutex for safe deinitialization");
+        // Still proceed with deinit but with a warning
+        is_initialized = false;
+        current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
+        return ESP_OK;
     }
-    
-    // Additional delay to ensure interrupt controller and GPIO matrix settle
-    ESP_LOGI(TAG, "Additional settling time (50ms) for interrupt/GPIO matrix...");
-    vTaskDelay(pdMS_TO_TICKS(50));
-    
-    // Mark as uninitialized
-    is_initialized = false;
-    current_tx_sample_rate = CONFIG_AUDIO_SAMPLE_RATE;
-    
-    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════════════");
-    ESP_LOGI(TAG, "║ ✅ Modern I2S STD Driver Deinitialized");
-    ESP_LOGI(TAG, "║ Camera Can Now Initialize");
-    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════════════");
-    
-    return ret;
 }
 
 esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_written, uint32_t timeout_ms) {
@@ -474,12 +488,12 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     int64_t channel_time = (esp_timer_get_time() - start_time) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ Failed to create I2S channels: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)channel_time);
+        ESP_LOGE(TAG, "❌ Failed to create I2S channels: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)channel_time);
         ESP_LOGE(TAG, "  Free heap after fail: %u bytes", (unsigned int)esp_get_free_heap_size());
         return ret;
     }
-    ESP_LOGI(TAG, "✅ I2S channels created (took %lld ms)", (long long)channel_time);
+    ESP_LOGI(TAG, "✅ I2S channels created (took %"PRIu32" ms)", (uint32_t)channel_time);
     ESP_LOGI(TAG, "  TX handle: %p | RX handle: %p", g_i2s_tx_handle, g_i2s_rx_handle);
     
     // STEP 2: Configure TX (speaker) channel
@@ -516,15 +530,15 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     int64_t tx_init_time = (esp_timer_get_time() - start_time) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ TX channel init FAILED: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)tx_init_time);
+        ESP_LOGE(TAG, "❌ TX channel init FAILED: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)tx_init_time);
         i2s_del_channel(g_i2s_tx_handle);
         i2s_del_channel(g_i2s_rx_handle);
         g_i2s_tx_handle = NULL;
         g_i2s_rx_handle = NULL;
         return ret;
     }
-    ESP_LOGI(TAG, "✅ TX channel configured (took %lld ms)", (long long)tx_init_time);
+    ESP_LOGI(TAG, "✅ TX channel configured (took %"PRIu32" ms)", (uint32_t)tx_init_time);
     
     // STEP 3: Configure RX (microphone) channel
     ESP_LOGI(TAG, "[STEP 3/6] Configuring RX (microphone) channel...");
@@ -560,15 +574,15 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     int64_t rx_init_time = (esp_timer_get_time() - start_time) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ RX channel init FAILED: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)rx_init_time);
+        ESP_LOGE(TAG, "❌ RX channel init FAILED: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)rx_init_time);
         i2s_del_channel(g_i2s_tx_handle);
         i2s_del_channel(g_i2s_rx_handle);
         g_i2s_tx_handle = NULL;
         g_i2s_rx_handle = NULL;
         return ret;
     }
-    ESP_LOGI(TAG, "✅ RX channel configured (took %lld ms)", (long long)rx_init_time);
+    ESP_LOGI(TAG, "✅ RX channel configured (took %"PRIu32" ms)", (uint32_t)rx_init_time);
     
     // STEP 4: Enable TX channel
     ESP_LOGI(TAG, "[STEP 4/6] Enabling TX channel...");
@@ -577,15 +591,15 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     int64_t tx_enable_time = (esp_timer_get_time() - start_time) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ TX channel enable FAILED: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)tx_enable_time);
+        ESP_LOGE(TAG, "❌ TX channel enable FAILED: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)tx_enable_time);
         i2s_del_channel(g_i2s_tx_handle);
         i2s_del_channel(g_i2s_rx_handle);
         g_i2s_tx_handle = NULL;
         g_i2s_rx_handle = NULL;
         return ret;
     }
-    ESP_LOGI(TAG, "✅ TX channel enabled (took %lld ms)", (long long)tx_enable_time);
+    ESP_LOGI(TAG, "✅ TX channel enabled (took %"PRIu32" ms)", (uint32_t)tx_enable_time);
     
     // STEP 5: Enable RX channel
     ESP_LOGI(TAG, "[STEP 5/6] Enabling RX channel...");
@@ -594,8 +608,8 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
     int64_t rx_enable_time = (esp_timer_get_time() - start_time) / 1000;
     
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "❌ RX channel enable FAILED: %s (took %lld ms)", 
-                 esp_err_to_name(ret), (long long)rx_enable_time);
+        ESP_LOGE(TAG, "❌ RX channel enable FAILED: %s (took %"PRIu32" ms)", 
+                 esp_err_to_name(ret), (uint32_t)rx_enable_time);
         i2s_channel_disable(g_i2s_tx_handle);
         i2s_del_channel(g_i2s_tx_handle);
         i2s_del_channel(g_i2s_rx_handle);
@@ -603,7 +617,7 @@ static esp_err_t configure_i2s_std_full_duplex(void) {
         g_i2s_rx_handle = NULL;
         return ret;
     }
-    ESP_LOGI(TAG, "✅ RX channel enabled (took %lld ms)", (long long)rx_enable_time);
+    ESP_LOGI(TAG, "✅ RX channel enabled (took %"PRIu32" ms)", (uint32_t)rx_enable_time);
     
     // STEP 6: Hardware stabilization
     ESP_LOGI(TAG, "[STEP 6/6] Hardware stabilization...");

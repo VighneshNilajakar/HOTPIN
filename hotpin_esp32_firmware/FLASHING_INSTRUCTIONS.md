@@ -292,8 +292,8 @@ I (xxx) HOTPIN_MAIN:     HotPin ESP32-CAM AI Agent - INITIALIZING
 I (xxx) HOTPIN_MAIN: ================================================
 
 I (xxx) HOTPIN_MAIN: Disabling brownout detector
-I (xxx) HOTPIN_MAIN: Configuring GPIO 4 (Flash LED) to LOW
-I (xxx) HOTPIN_MAIN: Holding GPIO 4 state via RTC hold
+I (xxx) HOTPIN_MAIN: Configuring GPIO 12 (Button Input) to appropriate state
+I (xxx) HOTPIN_MAIN: Holding GPIO 12 state via RTC hold
 
 I (xxx) WIFI: Initializing WiFi...
 I (xxx) WIFI: WiFi started, connecting to SSID: YourSSID
@@ -308,7 +308,7 @@ I (xxx) CAMERA: Initializing camera controller...
 I (xxx) CAMERA: ✅ Camera initialized successfully (VGA 640x480)
 
 I (xxx) AUDIO: Audio driver manager ready for mode switching
-I (xxx) BUTTON: Button handler initialized on GPIO 4
+I (xxx) BUTTON: Button handler initialized on GPIO 12
 
 I (xxx) STATE_MGR: State manager started - Default: CAMERA_STANDBY
 
@@ -397,12 +397,13 @@ I (xxx) WEBSOCKET: Handshake sent: {"session_id":"esp32-cam-hotpin-001"}
 4. Ping server from ESP32's network
 5. Check server logs for connection attempts
 
-### Issue 5: "GPIO 4 Flash LED always on"
-**Symptoms**: Bright flash LED during boot
+### Issue 5: "GPIO 12 Button Input conflicts"
+**Symptoms**: Boot issues or unstable operation with GPIO12 button input
 
 **Solutions**:
-- Already mitigated with `rtc_gpio_hold_en(GPIO_NUM_4)` in firmware
-- If persists, add physical pull-down resistor (10kΩ) on GPIO4
+- Ensure proper external pull-up/pull-down resistor on GPIO12 for stable boot
+- Verify `rtc_gpio_hold_dis(GPIO_NUM_12)` is called during initialization
+- If boot issues persist, consider using alternative non-strapping pin for button input
 
 ### Issue 6: "Guru Meditation Error: LoadProhibited"
 **Symptoms**: Crash during mode switching
@@ -577,7 +578,7 @@ Ctrl + ]
 - [ ] WebSocket connects to server
 - [ ] Button responds to presses
 - [ ] Status LED (GPIO33) indicates system state
-- [ ] Flash LED (GPIO4) stays OFF
+- [ ] Button input (GPIO12) responds correctly
 
 ---
 

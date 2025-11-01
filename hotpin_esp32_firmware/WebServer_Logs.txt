@@ -1,8 +1,5 @@
-PS F:\Documents\HOTPIN> python main.py
-[nltk_data] Downloading package punkt_tab to C:\Users\Vighnesh
-[nltk_data]     Nilajakar\AppData\Roaming\nltk_data...
-[nltk_data]   Unzipping tokenizers\punkt_tab.zip.
-INFO:     Started server process [15100]
+PS F:\Documents\HOTPIN\HOTPIN> python main.py
+INFO:     Started server process [9124]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -11,10 +8,10 @@ Hotpin Prototype Server Starting...
 
 Network Information:
    WiFi Network: wifi
-   IP Address: 10.184.66.58
+   IP Address: 10.143.111.58
    Interface: WiFi
-   Server URL: http://10.184.66.58:8000
-   WebSocket URL: ws://10.184.66.58:8000/ws
+   Server URL: http://10.143.111.58:8000
+   WebSocket URL: ws://10.143.111.58:8000/ws
 
 Groq AsyncClient initialized with model: llama-3.1-8b-instant
 Loading Vosk model from: ./model
@@ -38,32 +35,39 @@ Server ready at ws://0.0.0.0:8000/ws
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.184.66.214:65466 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:60840 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
+📷 [hotpin-998C64-13] Image received: image.jpg, 11559 bytes (11.29 KB)
+💾 [hotpin-998C64-13] Image saved: captured_images/hotpin-998C64-13_20251101_130837.jpg
+INFO:     10.143.111.214:60841 - "POST /image HTTP/1.1" 200 OK
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 144384 bytes of audio...
+🔄 [esp32-cam-hotpin] Processing 90112 bytes of audio...
 Transcription [esp32-cam-hotpin]: "hello"
 📝 [esp32-cam-hotpin] Transcript: "hello"
 🤖 [esp32-cam-hotpin] LLM response: "Hello, how can I assist you today?"
 TTS synthesis completed: 94404 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_4t0g33h4.wav
+Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_la9qzokh.wav
 🔊 [esp32-cam-hotpin] Streaming 94404 bytes of audio response...
 ✓ [esp32-cam-hotpin] Response streaming complete
 🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 138240 bytes of audio...
-Transcription [esp32-cam-hotpin]: "how can you help me"
-📝 [esp32-cam-hotpin] Transcript: "how can you help me"
-🤖 [esp32-cam-hotpin] LLM response: "I can answer questions, provide information, and help with tasks like setting reminders and sending messages."
-TTS synthesis completed: 244604 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_sdlxuo0h.wav
-🔊 [esp32-cam-hotpin] Streaming 244604 bytes of audio response...
+🔄 [esp32-cam-hotpin] Processing 98304 bytes of audio...
+Transcription [esp32-cam-hotpin]: "what is your name"
+📝 [esp32-cam-hotpin] Transcript: "what is your name"
+🤖 [esp32-cam-hotpin] LLM response: "I'm Hotpin, your compact and helpful voice assistant."
+TTS synthesis completed: 130770 bytes generated
+Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_83ik0obo.wav
+🔊 [esp32-cam-hotpin] Streaming 130770 bytes of audio response...
 ✓ [esp32-cam-hotpin] Response streaming complete
 🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 385024 bytes of audio...
+🔄 [esp32-cam-hotpin] Processing 196608 bytes of audio...
 Empty transcription for session: esp32-cam-hotpin
 ⚠ [esp32-cam-hotpin] Empty transcription
-🔄
+🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005)
+✓ Cleared context for session: esp32-cam-hotpin
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed

@@ -82,6 +82,11 @@ esp_err_t led_controller_init(void) {
 		return ret;
 	}
 
+	// Check if CONFIG_STATUS_LED_GPIO conflicts with other peripherals
+	if (CONFIG_STATUS_LED_GPIO == 0) {
+		ESP_LOGW(TAG, "GPIO 0 is not usable, maybe conflict with others - consider reconfiguring");
+	}
+
 	install_fade_if_needed();
 
 	if (s_state_mutex == NULL) {

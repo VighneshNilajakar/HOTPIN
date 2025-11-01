@@ -42,11 +42,12 @@
  ******************************************************************************/
 
 // ========== User Input ==========
-#define CONFIG_PUSH_BUTTON_GPIO             GPIO_NUM_4      // Mode switch/Shutdown
+#define CONFIG_PUSH_BUTTON_GPIO             GPIO_NUM_12     // Mode switch/Shutdown (Changed from GPIO4 to GPIO12)
 #define CONFIG_STATUS_LED_GPIO              GPIO_NUM_33     // System status indicator (Camera D7)
 
 // ========== I2S Audio Pins (Shared Clock Configuration) ==========
-// CRITICAL FIX: GPIO12 is a strapping pin (MTDI) and cannot be used for I2S
+// CRITICAL NOTE: GPIO12 is a strapping pin (MTDI) - ensure proper external pull-up/pull-down
+// for reliable boot behavior when used as button input
 // Using GPIO2 for I2S RX data input to avoid hardware conflicts
 // GPIO14 → INMP441 SCK and MAX98357A BCLK (shared)
 // GPIO15 → INMP441 WS and MAX98357A LRC (shared)
@@ -59,7 +60,7 @@
 
 // ========== Camera Pins (AI-Thinker Standard) ==========
 #define CONFIG_CAMERA_PIN_PWDN              GPIO_NUM_32     // Power down
-#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_NC     // Reset (not used - GPIO12 is strapping pin)
+#define CONFIG_CAMERA_PIN_RESET             GPIO_NUM_NC     // Reset (not used)
 #define CONFIG_CAMERA_PIN_XCLK              GPIO_NUM_0      // 20MHz clock
 #define CONFIG_CAMERA_PIN_SIOD              GPIO_NUM_26     // I2C data (SCCB)
 #define CONFIG_CAMERA_PIN_SIOC              GPIO_NUM_27     // I2C clock (SCCB)
@@ -227,5 +228,8 @@ _Static_assert(CONFIG_AUDIO_SAMPLE_RATE == 16000,
 
 _Static_assert(CONFIG_I2S_DMA_BUF_COUNT >= 4, 
                "Minimum 4 DMA buffers required for stable audio");
+
+// Include safe memory utilities
+#include "safe_memory.h"
 
 #endif // CONFIG_H

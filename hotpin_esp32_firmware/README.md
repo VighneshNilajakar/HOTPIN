@@ -37,7 +37,7 @@ This firmware implements a sophisticated dual-mode system on the ESP32-CAM platf
 |-----------|-------|-----------|------------|
 | Microphone | INMP441 | I2S | BCLK=GPIO14, WS=GPIO15, DIN=GPIO13 |
 | Speaker Amp | MAX98357A | I2S | BCLK=GPIO14, WS=GPIO15, DOUT=GPIO5 |
-| Push Button | Tactile | GPIO | GPIO4 (with pull-up resistor) |
+| Push Button | Tactile | GPIO | GPIO12 (with pull-up resistor) - Note: Strapping Pin |
 | Status LED | Any LED | GPIO | GPIO2 (with current-limiting resistor) |
 
 ---
@@ -55,7 +55,7 @@ Component config → SD/MMC → [ ] MMC/SDIO Host Support
 
 | GPIO | Function | Component | Notes |
 |------|----------|-----------|-------|
-| **GPIO 4** | Button Input | User input | LED disabled in firmware |
+| **GPIO 12** | Button Input | User input | Strapping pin - needs external pull-up/down |
 | **GPIO 2** | Status LED | System indicator | Freed from SD_D0 |
 | **GPIO 5** | I2S TX Data | MAX98357A | Speaker output |
 | **GPIO 13** | I2S RX Data | INMP441 | Microphone input |
@@ -63,7 +63,7 @@ Component config → SD/MMC → [ ] MMC/SDIO Host Support
 | **GPIO 15** | I2S WS | Shared clock | TX/RX shared |
 
 ### **Camera Pins (Standard AI-Thinker)**
-- PWDN: GPIO32, RESET: GPIO12, XCLK: GPIO0
+- PWDN: GPIO32, RESET: GPIO_NC (Not Connected), XCLK: GPIO0
 - D0-D7: GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35
 - VSYNC: GPIO25, HREF: GPIO23, PCLK: GPIO22
 - SCCB (I2C): SDA=GPIO26, SCL=GPIO27
@@ -268,7 +268,7 @@ void tts_decoder_task(void *pvParameters);
 - System initialization sequence:
   1. Disable brownout detector
   2. Initialize NVS flash
-  3. **CRITICAL**: Configure GPIO4 LOW + `rtc_gpio_hold_en(GPIO_NUM_4)`
+  3. **CRITICAL**: Configure GPIO12 with appropriate pull-up/pull-down + `rtc_gpio_hold_dis(GPIO_NUM_12)`
   4. Initialize WiFi
   5. Create I2S configuration mutex
   6. Start all FreeRTOS tasks
@@ -279,10 +279,10 @@ void app_main(void) {
     // 1. Disable brownout
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     
-    // 2. GPIO 4 LED control (CRITICAL)
-    gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_4, 0);  // LED OFF
-    rtc_gpio_hold_en(GPIO_NUM_4);   // Hold state across reboots
+    // 2. GPIO 12 button input (CRITICAL)
+    gpio_set_direction(GPIO_NUM_12, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_NUM_12, GPIO_PULLUP_ONLY);  // Internal pull-up for button input
+    rtc_gpio_hold_dis(GPIO_NUM_12);   // Release hold to allow normal operation
     
     // 3. Initialize NVS, WiFi, WebSocket
     // 4. Create mutexes and queues
@@ -352,7 +352,7 @@ idf.py -p COM3 flash monitor  # Adjust COM port
 
 ### **1. Power-On Test**
 - **Expected**: Status LED (GPIO2) turns ON
-- **Expected**: Flash LED (GPIO4) remains OFF
+- **Expected**: Button input (GPIO12) responds correctly
 - **Expected**: Serial log shows "Groq AsyncClient initialized"
 
 ### **2. Camera Mode Test**
@@ -379,7 +379,7 @@ idf.py -p COM3 flash monitor  # Adjust COM port
 1. **PSRAM Mandatory**: Standard ESP32-CAM modules often lack PSRAM
    - **Solution**: Use ESP32-WROVER-E based modules only
    
-2. **GPIO 4 "Ghost Flash"**: LED may flicker during boot
+2. **GPIO 12 "Strapping Pin Boot Issue"**: May cause boot issues if not properly configured
    - **Solution**: Implemented `rtc_gpio_hold_en()` in firmware
 
 3. **I2S Peripheral Conflict**: Camera and audio cannot run simultaneously
@@ -432,7 +432,7 @@ Educational/Research project - 6th Semester College Project
 
 1. ✅ **PSRAM is MANDATORY** - verify with `idf.py menuconfig`
 2. ✅ **SD Card MUST be disabled** - frees critical GPIOs
-3. ✅ **GPIO 4 LED control** - prevents flash LED artifacts
+3. ✅ **GPIO 12 Button Input** - properly configured for strapping pin usage
 4. ✅ **Mutex-protected driver switching** - prevents LoadProhibited exceptions
 5. ✅ **Task priorities** - I2S audio highest (Priority 9)
 
