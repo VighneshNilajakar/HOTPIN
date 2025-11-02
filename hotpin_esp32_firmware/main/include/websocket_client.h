@@ -41,6 +41,7 @@ typedef enum {
     WEBSOCKET_PIPELINE_STAGE_LLM,
     WEBSOCKET_PIPELINE_STAGE_TTS,
     WEBSOCKET_PIPELINE_STAGE_COMPLETE,
+    WEBSOCKET_PIPELINE_STAGE_ERROR,  // Added for error state handling
 } websocket_pipeline_stage_t;
 
 /**

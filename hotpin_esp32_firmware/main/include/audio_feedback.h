@@ -53,6 +53,14 @@ static inline esp_err_t audio_feedback_beep_double(bool allow_temp_driver) {
                                        allow_temp_driver);
 }
 
+/**
+ * @brief Convenience helper for a triple short beep.
+ */
+static inline esp_err_t audio_feedback_beep_triple(bool allow_temp_driver) {
+    return audio_feedback_play_pattern(AUDIO_FEEDBACK_PATTERN_TRIPLE,
+                                       allow_temp_driver);
+}
+
 #ifdef __cplusplus
 }
 #endif

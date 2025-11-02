@@ -67,6 +67,19 @@ static esp_err_t audio_feedback_emit_beep(bool allow_temp_driver) {
             ESP_LOGW(TAG, "Audio driver not available for feedback");
             return ESP_ERR_INVALID_STATE;
         }
+        
+        // ✅ FIX #12: Check DMA-capable memory before attempting audio driver init
+        // I2S driver needs ~8-10KB of DMA memory for buffers
+        // If insufficient memory, skip feedback gracefully instead of failing
+        size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        const size_t MIN_DMA_REQUIRED = 20480; // 20KB minimum (with safety margin)
+        
+        if (dma_free < MIN_DMA_REQUIRED) {
+            ESP_LOGW(TAG, "Insufficient DMA memory for audio driver (%zu bytes free, need %zu) - skipping feedback",
+                     dma_free, MIN_DMA_REQUIRED);
+            return ESP_ERR_NO_MEM;
+        }
+        
         ret = audio_driver_init();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to init audio driver for feedback: %s", esp_err_to_name(ret));

@@ -77,11 +77,27 @@ size_t tts_decoder_get_pending_bytes(void);
 esp_err_t tts_decoder_wait_for_idle(uint32_t timeout_ms);
 
 /**
+ * @brief Reset TTS decoder session state for next audio stream
+ * 
+ * Clears session-specific state while keeping decoder running
+ */
+void tts_decoder_reset_session(void);
+
+/**
  * @brief Notify the decoder that the server finished streaming audio
  *
  * Queues a graceful stop sentinel allowing the playback task to exit
  * after draining buffered audio.
  */
 void tts_decoder_notify_end_of_stream(void);
+
+/**
+ * @brief Flush and reset TTS decoder completely for session transition
+ * 
+ * Flushes any pending audio and resets decoder state completely for next session
+ * 
+ * @return ESP_OK on success
+ */
+esp_err_t tts_decoder_flush_and_reset(void);
 
 #endif // TTS_DECODER_H

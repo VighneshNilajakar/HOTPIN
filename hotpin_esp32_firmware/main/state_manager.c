@@ -40,6 +40,16 @@ static websocket_pipeline_stage_t s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_ID
 static bool s_transition_in_progress = false;
 static bool s_capture_in_progress = false;
 static bool s_tts_playback_active = false;
+static bool s_transition_scheduled = false;
+
+// Safe watchdog reset function to prevent errors when task is not registered
+static inline void safe_task_wdt_reset(void) {
+    esp_err_t ret = esp_task_wdt_reset();
+    if (ret != ESP_OK) {
+        // Only log at detailed level to avoid spam
+        ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
+    }
+}
 
 // External synchronization primitive
 extern SemaphoreHandle_t g_i2s_config_mutex;
@@ -119,7 +129,7 @@ void state_manager_task(void *pvParameters) {
     
     while (1) {
         // Reset watchdog timer
-        esp_task_wdt_reset();
+        safe_task_wdt_reset();
         
         if (xQueueReceive(event_queue, &incoming_event, pdMS_TO_TICKS(100)) == pdTRUE) {
             switch (incoming_event.type) {
@@ -342,6 +352,13 @@ static void process_button_event(const button_event_payload_t *button_event)
     switch (button_event->type) {
         case BUTTON_EVENT_SINGLE_CLICK:
             ESP_LOGI(TAG, "Single click - mode toggle requested");
+            
+            // Prevent button events during transitions to avoid conflicts
+            if (current_state == SYSTEM_STATE_TRANSITIONING || s_transition_in_progress) {
+                ESP_LOGW(TAG, "Button event ignored - system transitioning");
+                return;
+            }
+            
             s_mode_switch_count++;
 
             if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
@@ -372,6 +389,13 @@ static void process_button_event(const button_event_payload_t *button_event)
             } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
                 ESP_LOGI(TAG, "Switching: Voice → Camera (count: %u)",
                          (unsigned int)s_mode_switch_count);
+                
+                // Prevent button events during transitions to avoid conflicts
+                if (s_transition_in_progress) {
+                    ESP_LOGW(TAG, "Voice to camera transition ignored - system already transitioning");
+                    return;
+                }
+                
                 previous_state = current_state;
                 current_state = SYSTEM_STATE_TRANSITIONING;
                 s_transition_in_progress = true;
@@ -385,9 +409,13 @@ static void process_button_event(const button_event_payload_t *button_event)
                 if (cam_ret == ESP_OK) {
                     current_state = SYSTEM_STATE_CAMERA_STANDBY;
                     ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
+                    // Reset transition scheduled flag since transition completed
+                    s_transition_scheduled = false;
                 } else {
                     ESP_LOGE(TAG, "❌ Camera mode transition failed");
                     current_state = SYSTEM_STATE_ERROR;
+                    // Reset transition scheduled flag since transition failed
+                    s_transition_scheduled = false;
                     esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
                     if (beep_ret != ESP_OK) {
                         ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
@@ -454,10 +482,62 @@ static void process_websocket_status(websocket_status_t status)
         case WEBSOCKET_STATUS_DISCONNECTED:
             ESP_LOGW(TAG, "WebSocket disconnected");
             led_controller_set_state(LED_STATE_PULSING);
+            
+            // CRITICAL FIX: Handle disconnection better in voice mode
+            // Prevent transitions during active transitions to avoid conflicts
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE && !s_transition_in_progress) {
+                // Only schedule transition if one isn't already scheduled to prevent multiple transitions
+                if (!s_transition_scheduled) {
+                    s_transition_scheduled = true;
+                    ESP_LOGW(TAG, "WebSocket disconnected while in voice mode - triggering transition to camera");
+                    // Schedule a transition to camera mode to prevent hanging
+                    system_event_t evt = {
+                        .type = SYSTEM_EVENT_WEBSOCKET_STATUS,
+                        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+                        .data.websocket = {
+                            .status = WEBSOCKET_STATUS_DISCONNECTED,
+                        }
+                    };
+                    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(100))) {
+                        ESP_LOGE(TAG, "Failed to enqueue WebSocket disconnect event for voice mode");
+                        s_transition_scheduled = false; // Reset the flag if posting failed
+                    }
+                } else {
+                    ESP_LOGD(TAG, "WebSocket disconnect transition already scheduled, skipping");
+                }
+            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE && s_transition_in_progress) {
+                ESP_LOGW(TAG, "WebSocket disconnect ignored - system transitioning");
+            }
             break;
         case WEBSOCKET_STATUS_ERROR:
             ESP_LOGE(TAG, "WebSocket error signalled");
             led_controller_set_state(LED_STATE_SOS);
+            
+            // CRITICAL FIX: Handle error better in voice mode
+            // Prevent transitions during active transitions to avoid conflicts
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE && !s_transition_in_progress) {
+                // Only schedule transition if one isn't already scheduled to prevent multiple transitions
+                if (!s_transition_scheduled) {
+                    s_transition_scheduled = true;
+                    ESP_LOGE(TAG, "WebSocket error occurred while in voice mode - triggering transition to camera");
+                    // Schedule a transition to camera mode to prevent hanging
+                    system_event_t evt = {
+                        .type = SYSTEM_EVENT_WEBSOCKET_STATUS,
+                        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+                        .data.websocket = {
+                            .status = WEBSOCKET_STATUS_ERROR,
+                        }
+                    };
+                    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(100))) {
+                        ESP_LOGE(TAG, "Failed to enqueue WebSocket error event for voice mode");
+                        s_transition_scheduled = false; // Reset the flag if posting failed
+                    }
+                } else {
+                    ESP_LOGD(TAG, "WebSocket error transition already scheduled, skipping");
+                }
+            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE && s_transition_in_progress) {
+                ESP_LOGW(TAG, "WebSocket error ignored - system transitioning");
+            }
             break;
         default:
             break;
@@ -487,6 +567,14 @@ static void handle_pipeline_stage_event(websocket_pipeline_stage_t stage)
             led_controller_set_state(LED_STATE_SOLID);
             break;
         case WEBSOCKET_PIPELINE_STAGE_IDLE:
+            // When entering IDLE state, ensure TTS is fully reset for next session
+            if (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+                // Only reset if we're coming from complete state
+                esp_err_t reset_ret = tts_decoder_flush_and_reset();
+                if (reset_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "TTS flush and reset on IDLE transition failed: %s", esp_err_to_name(reset_ret));
+                }
+            }
             led_controller_set_state(LED_STATE_SOLID);
             break;
         default:
@@ -553,12 +641,12 @@ static void wait_for_voice_pipeline_shutdown(void) {
             break;
         }
 
-        esp_task_wdt_reset();
+        safe_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     const TickType_t overall_start = xTaskGetTickCount();
-    const TickType_t overall_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_WAIT_MS * 2); // Doubled timeout for more stability
+    const TickType_t overall_timeout = pdMS_TO_TICKS(VOICE_PIPELINE_STAGE_WAIT_MS * 3); // Tripled timeout for more stability (increased from 2x)
 
     while (true) {
         websocket_pipeline_stage_t stage = websocket_client_get_pipeline_stage();
@@ -578,42 +666,86 @@ static void wait_for_voice_pipeline_shutdown(void) {
         if ((xTaskGetTickCount() - overall_start) >= overall_timeout) {
             ESP_LOGW(TAG, "Voice pipeline still active (%s) after %u ms",
                      websocket_client_pipeline_stage_to_string(stage),
-                     (unsigned int)(VOICE_PIPELINE_STAGE_WAIT_MS * 2));
+                     (unsigned int)(VOICE_PIPELINE_STAGE_WAIT_MS * 3)); // Updated timeout
             break;
         }
 
-        esp_task_wdt_reset();
+        safe_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     // Wait for TTS playback to complete before proceeding
+    // CRITICAL FIX: More robust TTS drain handling with better timeout management
     if (tts_decoder_has_pending_audio() || s_tts_playback_active) {
         size_t pending_bytes = tts_decoder_get_pending_bytes();
         ESP_LOGI(TAG, "Waiting for TTS playback drain (~%zu bytes pending, timeout %u ms)",
-                 pending_bytes, (unsigned int)(VOICE_TTS_FLUSH_WAIT_MS * 2)); // Doubled timeout
+                 pending_bytes, (unsigned int)(VOICE_TTS_FLUSH_WAIT_MS * 3)); // Tripled timeout (increased from 2x)
 
         // Wait in smaller increments and check for state changes
         const TickType_t tts_start = xTaskGetTickCount();
-        const TickType_t tts_timeout = pdMS_TO_TICKS(VOICE_TTS_FLUSH_WAIT_MS * 2); // Doubled timeout
+        const TickType_t tts_timeout = pdMS_TO_TICKS(VOICE_TTS_FLUSH_WAIT_MS * 3); // Tripled timeout
         uint32_t drain_checks = 0;
+        uint32_t timeout_warnings = 0;
         
         while (true) {
-            // Wait for TTS decoder to become idle
-            tts_decoder_wait_for_idle(pdMS_TO_TICKS(100));
-            websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
-            bool pipeline_still_active = websocket_client_is_pipeline_active();
-            
-            // Check if TTS has completed or if there's no more pending audio
-            if (!tts_decoder_has_pending_audio() && !s_tts_playback_active) {
-                ESP_LOGI(TAG, "TTS playback drained successfully after %u checks", (unsigned int)drain_checks);
+            // ✅ FIX #3: Pre-check - if TTS is already idle, exit immediately without waiting
+            // This catches the case where playback completed before we entered this loop
+            if (!tts_decoder_is_playing() && !tts_decoder_has_pending_audio()) {
+                ESP_LOGI(TAG, "TTS playback already finished - no need to wait");
                 break;
             }
             
-            // Check for timeout
+            // Wait for TTS decoder to become idle with a 200ms timeout
+            esp_err_t wait_ret = tts_decoder_wait_for_idle(200);
+            
+            // ✅ FIX #3: If wait returns ESP_OK, break IMMEDIATELY
+            // The wait_for_idle() function has already confirmed the task exited cleanly
+            if (wait_ret == ESP_OK) {
+                ESP_LOGI(TAG, "TTS decoder confirmed idle");
+                break;
+            }
+            
+            websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+            bool pipeline_still_active = websocket_client_is_pipeline_active();
+            
+            // CRITICAL FIX: Better handling of timeout conditions
+            if (wait_ret == ESP_ERR_TIMEOUT) {
+                timeout_warnings++;
+                ESP_LOGW(TAG, "TTS wait for idle timeout #%u (drain_checks=%u)", 
+                         (unsigned int)timeout_warnings, (unsigned int)drain_checks);
+                
+                // After multiple timeouts, we might need to force completion
+                if (timeout_warnings > 10) { // Increased from 6 to 10 warnings
+                    ESP_LOGW(TAG, "Multiple TTS idle timeouts - checking if we can proceed anyway");
+                    
+                    // If the pipeline is complete and no pending audio, we can continue
+                    if (current_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE && 
+                        !pipeline_still_active && 
+                        !tts_decoder_has_pending_audio()) {
+                        ESP_LOGI(TAG, "Pipeline complete despite timeouts - proceeding with shutdown");
+                        break;
+                    }
+                }
+            }
+            
+            // Check if TTS has completed or if there's no more pending audio
+            if (!tts_decoder_has_pending_audio() && !s_tts_playback_active) {
+                ESP_LOGI(TAG, "TTS playback drained successfully after %u checks (and %u timeouts)", 
+                         (unsigned int)drain_checks, (unsigned int)timeout_warnings);
+                break;
+            }
+            
+            // Check for overall timeout
             if ((xTaskGetTickCount() - tts_start) >= tts_timeout) {
-                ESP_LOGW(TAG, "TTS playback drain timed out after %u checks; forcing shutdown", (unsigned int)drain_checks);
-                // CRITICAL: Force stop TTS decoder to prevent hanging
-                tts_decoder_stop();
+                ESP_LOGW(TAG, "TTS playback drain timed out after %u checks and %u timeouts; proceeding with forced shutdown", 
+                         (unsigned int)drain_checks, (unsigned int)timeout_warnings);
+                // CRITICAL: Force stop TTS decoder to prevent hanging, but more gracefully
+                // Instead of immediately stopping, try to flush first
+                esp_err_t flush_ret = tts_decoder_flush_and_reset();
+                if (flush_ret != ESP_OK) {
+                    ESP_LOGW(TAG, "TTS flush and reset failed: %s - forcing stop", esp_err_to_name(flush_ret));
+                    tts_decoder_stop();
+                }
                 break;
             }
             
@@ -626,11 +758,32 @@ static void wait_for_voice_pipeline_shutdown(void) {
             }
             
             drain_checks++;
-            esp_task_wdt_reset();
-            vTaskDelay(pdMS_TO_TICKS(50));
+            safe_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(100)); // Increased from 50ms to 100ms
         }
     } else {
         ESP_LOGI(TAG, "TTS playback already drained - no pending audio");
+    }
+    
+    // CRITICAL FIX: Ensure TTS decoder is in a completely clean state
+    ESP_LOGI(TAG, "Flushing and resetting TTS decoder for next session");
+    esp_err_t flush_ret = tts_decoder_flush_and_reset();
+    if (flush_ret != ESP_OK) {
+        ESP_LOGW(TAG, "TTS flush and reset failed: %s - forcing additional cleanup", esp_err_to_name(flush_ret));
+        // Additional safety measure: stop TTS decoder if flush failed
+        tts_decoder_stop();
+        // Reset session manually
+        tts_decoder_reset_session();
+    }
+    
+    // CRITICAL FIX: Additional safety check: ensure all audio components are truly idle before proceeding
+    // This prevents race conditions where audio might still be processing
+    vTaskDelay(pdMS_TO_TICKS(200)); // Extra 200ms delay to ensure audio processing completes
+    
+    // Final check: ensure TTS decoder is really stopped
+    if (tts_decoder_is_playing()) {
+        ESP_LOGW(TAG, "TTS decoder still playing after shutdown - forcing stop");
+        tts_decoder_stop();
     }
 }
 
@@ -972,6 +1125,12 @@ static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "║ STEP 6: Starting STT/TTS pipelines");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
 
+    // Ensure clean state for the TTS decoder before starting
+    ret = tts_decoder_flush_and_reset();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "TTS flush and reset before start failed: %s", esp_err_to_name(ret));
+    }
+    
     ret = stt_pipeline_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start STT pipeline: %s", esp_err_to_name(ret));
@@ -1082,9 +1241,13 @@ static void handle_error_state(void) {
         current_state = SYSTEM_STATE_CAMERA_STANDBY;
         error_count = 0;  // Reset error count on success
         last_signaled_error = 0;
+        // Reset transition scheduled flag since recovery transition completed
+        s_transition_scheduled = false;
         ESP_LOGI(TAG, "✅ Recovery successful - back to camera mode");
     } else {
         current_state = SYSTEM_STATE_ERROR;
+        // Reset transition scheduled flag since recovery failed
+        s_transition_scheduled = false;
         ESP_LOGE(TAG, "❌ Recovery failed");
     }
 }

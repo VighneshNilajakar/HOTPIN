@@ -677,13 +677,56 @@ static void audio_streaming_task(void *pvParameters) {
         }
 
         if (!aborted_due_to_error) {
+            // ✅ FIX #4 (Enhanced): Add stabilization delay AND transport health check
+            // The WebSocket connection needs time to stabilize after mode transition
+            ESP_LOGI(TAG, "Connection stabilization delay (500ms)...");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            
+            // Re-verify connection is still healthy after delay
+            if (!websocket_client_is_connected()) {
+                ESP_LOGE(TAG, "WebSocket disconnected during stabilization - aborting");
+                aborted_due_to_error = true;
+                stt_pipeline_mark_stopped();
+                xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+            }
+            
+            // ✅ FIX #6: Test WebSocket transport health with small data send
+            // This ensures the transport layer is ready for heavy audio streaming
+            if (!aborted_due_to_error) {
+                ESP_LOGI(TAG, "Testing WebSocket transport health...");
+                uint8_t test_data[16] = {0};  // Small test packet
+                esp_err_t test_ret = websocket_client_send_audio(test_data, sizeof(test_data), 1000);
+                if (test_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "WebSocket transport health check failed: %s - aborting", esp_err_to_name(test_ret));
+                    aborted_due_to_error = true;
+                    stt_pipeline_mark_stopped();
+                    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                } else {
+                    ESP_LOGI(TAG, "✅ WebSocket transport verified healthy");
+                    // Small delay to ensure test packet is processed
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+        }
+        
+        if (!aborted_due_to_error) {
             ESP_LOGI(TAG, "Starting audio streaming to server...");
         }
 
         while (!aborted_due_to_error && !stt_pipeline_stop_signal_received()) {
-            // Check connection health before processing data
+            // CRITICAL FIX: Enhanced connection health checking before processing data
             if (!websocket_client_is_connected()) {
                 ESP_LOGE(TAG, "WebSocket disconnected during streaming");
+                stt_pipeline_mark_stopped();
+                xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                aborted_due_to_error = true;
+                break;
+            }
+            
+            // CRITICAL FIX: Check for explicit pipeline errors
+            websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+            if (current_stage == WEBSOCKET_PIPELINE_STAGE_ERROR) {
+                ESP_LOGE(TAG, "WebSocket pipeline error during streaming");
                 stt_pipeline_mark_stopped();
                 xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
                 aborted_due_to_error = true;
@@ -703,9 +746,19 @@ static void audio_streaming_task(void *pvParameters) {
                 esp_err_t ret = ring_buffer_read(stream_buffer, chunk_size, &bytes_read);
 
                 if (ret == ESP_OK && bytes_read > 0) {
-                    // Check if WebSocket is still connected before sending
+                    // CRITICAL FIX: Enhanced WebSocket connection checking before sending
                     if (!websocket_client_is_connected()) {
                         ESP_LOGW(TAG, "WebSocket disconnected during ring buffer read - aborting send");
+                        stt_pipeline_mark_stopped();
+                        xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                        aborted_due_to_error = true;
+                        break;
+                    }
+
+                    // CRITICAL FIX: Also check for explicit error state
+                    websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+                    if (current_stage == WEBSOCKET_PIPELINE_STAGE_ERROR) {
+                        ESP_LOGE(TAG, "WebSocket pipeline error during ring buffer read - aborting send");
                         stt_pipeline_mark_stopped();
                         xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
                         aborted_due_to_error = true;
@@ -730,9 +783,20 @@ static void audio_streaming_task(void *pvParameters) {
                             ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)",
                                      (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
                         } else {
+                            // CRITICAL FIX: Enhanced error handling for send failures
                             // Check if the failure is due to connection issue
                             if (!websocket_client_is_connected()) {
                                 ESP_LOGE(TAG, "WebSocket disconnected during audio send - aborting stream");
+                                stt_pipeline_mark_stopped();
+                                xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                                aborted_due_to_error = true;
+                                break;
+                            }
+                            
+                            // CRITICAL FIX: Also check for explicit error state
+                            websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+                            if (current_stage == WEBSOCKET_PIPELINE_STAGE_ERROR) {
+                                ESP_LOGE(TAG, "WebSocket pipeline error during audio send - aborting stream");
                                 stt_pipeline_mark_stopped();
                                 xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
                                 aborted_due_to_error = true;
@@ -743,8 +807,8 @@ static void audio_streaming_task(void *pvParameters) {
                             consecutive_send_failures++;
                             ESP_LOGW(TAG, "[STREAM] WebSocket send failed (%s). dropped_send_fail=%u",
                                      esp_err_to_name(ret), (unsigned int)dropped_send_fail);
-                            if (consecutive_send_failures >= AUDIO_STREAM_MAX_SEND_FAILURES) {
-                                ESP_LOGE(TAG, "[STREAM] Aborting after %u consecutive send failures", (unsigned int)consecutive_send_failures);
+                            if (consecutive_send_failures >= (AUDIO_STREAM_MAX_SEND_FAILURES * 2)) { // Double the failure threshold for more resilience
+                                ESP_LOGE(TAG, "[STREAM] Aborting after %u consecutive send failures", (unsigned int)(AUDIO_STREAM_MAX_SEND_FAILURES * 2));
                                 stt_pipeline_mark_stopped();
                                 xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
                                 aborted_due_to_error = true;
@@ -755,9 +819,19 @@ static void audio_streaming_task(void *pvParameters) {
                     }
                 }
             } else {
-                // Check WebSocket connection during idle periods
+                // CRITICAL FIX: Enhanced connection checking during idle periods
                 if (!websocket_client_is_connected()) {
                     ESP_LOGE(TAG, "WebSocket disconnected during idle period");
+                    stt_pipeline_mark_stopped();
+                    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
+                    aborted_due_to_error = true;
+                    break;
+                }
+                
+                // CRITICAL FIX: Also check for explicit error state during idle
+                websocket_pipeline_stage_t current_stage = websocket_client_get_pipeline_stage();
+                if (current_stage == WEBSOCKET_PIPELINE_STAGE_ERROR) {
+                    ESP_LOGE(TAG, "WebSocket pipeline error during idle period");
                     stt_pipeline_mark_stopped();
                     xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
                     aborted_due_to_error = true;

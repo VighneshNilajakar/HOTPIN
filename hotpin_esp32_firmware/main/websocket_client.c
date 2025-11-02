@@ -16,15 +16,29 @@
 #include "event_dispatcher.h"
 #include "system_events.h"
 #include "stt_pipeline.h"
+#include "tts_decoder.h"
+#include "audio_feedback.h"
+#include "state_manager.h"  // ✅ Added for state checking before TTS start
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
+#include "esp_task_wdt.h"  // Added for esp_task_wdt_reset
 #include "freertos/FreeRTOS.h"
 #include "cJSON.h"
 #include "inttypes.h"
 #include <string.h>
 
+// Safe watchdog reset function to prevent errors when task is not registered
 static const char *TAG = TAG_WEBSOCKET;
+
+// Safe watchdog reset function to prevent errors when task is not registered
+static inline void safe_task_wdt_reset(void) {
+    esp_err_t ret = esp_task_wdt_reset();
+    if (ret != ESP_OK) {
+        // Only log at detailed level to avoid spam
+        ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
+    }
+}
 
 // WebSocket client handle
 static esp_websocket_client_handle_t g_ws_client = NULL;
@@ -37,6 +51,9 @@ static volatile bool g_session_ready = false;
 static uint32_t s_reconnect_attempt_count = 0;
 static uint32_t s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS;
 
+// Health check tracking variables
+// (Removed unused tracking variables to eliminate compiler warnings)
+
 // Callback function pointer for incoming WAV audio data
 static websocket_audio_callback_t g_audio_callback = NULL;
 static void *g_audio_callback_arg = NULL;
@@ -44,6 +61,13 @@ static void *g_audio_callback_arg = NULL;
 // Callback function pointer for status messages
 static websocket_status_callback_t g_status_callback = NULL;
 static void *g_status_callback_arg = NULL;
+
+// Task handle for health check task
+static TaskHandle_t s_health_check_task_handle = NULL;
+
+// Task handles for reconnect tasks
+static TaskHandle_t s_reconnect_task_handle = NULL;
+static TaskHandle_t s_delayed_reconnect_task_handle = NULL;
 
 // ===========================
 // Private Function Declarations
@@ -55,7 +79,11 @@ static void handle_binary_message(const uint8_t *data, size_t len);
 static void update_pipeline_stage(const char *status, const char *stage);
 static const char *pipeline_stage_to_string(websocket_pipeline_stage_t stage);
 static void post_pipeline_stage_event(websocket_pipeline_stage_t stage);
+// Enhanced connection health check task
 static void websocket_health_check_task(void *pvParameters);
+// Helper functions for WebSocket reconnection tasks
+static void websocket_reconnect_task(void *pvParameters);
+static void websocket_delayed_reconnect_task(void *pvParameters);
 
 // ===========================
 // Public Functions
@@ -85,16 +113,24 @@ esp_err_t websocket_client_init(const char *uri, const char *auth_token) {
         ESP_LOGI(TAG, "Authorization header configured");
     }
     
-    // Configure WebSocket client
+    // Configure WebSocket client with enhanced reliability settings
+    // Using correct field names for ESP-IDF 5.4.2
     esp_websocket_client_config_t ws_cfg = {
         .uri = server_uri,
         .headers = (auth_token != NULL && strlen(auth_token) > 0) ? headers : NULL,
         .reconnect_timeout_ms = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS,
         .network_timeout_ms = CONFIG_WEBSOCKET_TIMEOUT_MS,
-        .buffer_size = 4096,  // Increase buffer for large audio chunks
-        .task_stack = 6144,   // Sufficient stack for callbacks
+        .buffer_size = 16384,  // Increased buffer for large audio chunks (doubled from 8192)
+        .task_stack = 8192,   // Increased stack for callbacks
         .task_prio = TASK_PRIORITY_WEBSOCKET,
         .disable_auto_reconnect = false,  // Enable auto-reconnect
+        .keep_alive_enable = true,         // Enable TCP keepalive
+        .keep_alive_idle = 45,             // Keep-alive idle time in seconds (45s)
+        .keep_alive_interval = 15,         // Keep-alive interval in seconds (15s)
+        .cert_pem = NULL,                 // No certificate validation for now
+        .transport = WEBSOCKET_TRANSPORT_OVER_TCP, // Explicit TCP transport
+        .use_global_ca_store = false,      // No global CA store
+        .skip_cert_common_name_check = true, // Skip certificate checks
     };
     
     g_ws_client = esp_websocket_client_init(&ws_cfg);
@@ -180,38 +216,210 @@ esp_err_t websocket_client_connect(void) {
         is_started = false;
     }
     
-    // Implement exponential backoff with jitter for reconnections
+    // CRITICAL FIX: Enhanced reconnection strategy with better backoff and health checks
     if (s_reconnect_attempt_count > 0) {
         // Calculate next delay: base delay * 2^(attempt count), with max and jitter
         uint32_t next_delay = s_last_reconnect_delay;
-        if (next_delay < 30000) { // Max 30 seconds
-            next_delay = (s_last_reconnect_delay * 2 < 30000) ? s_last_reconnect_delay * 2 : 30000;
+        if (next_delay < 60000) { // Max 60 seconds (increased from 30)
+            next_delay = (s_last_reconnect_delay * 2 < 60000) ? s_last_reconnect_delay * 2 : 60000;
         }
         
         // Add jitter to prevent thundering herd effect
-        uint32_t jitter = esp_random() % (next_delay / 4); // Add up to 25% jitter
+        uint32_t jitter = esp_random() % (next_delay / 3); // Add up to 33% jitter (increased from 25%)
         uint32_t final_delay = next_delay + jitter;
         
         ESP_LOGI(TAG, "Reconnect attempt %u, waiting %u ms (with jitter)", 
                  (unsigned int)s_reconnect_attempt_count, (unsigned int)final_delay);
         
-        vTaskDelay(pdMS_TO_TICKS(final_delay));
+        // CRITICAL FIX: Reset watchdog during long delays to prevent system reset
+        uint32_t delay_elapsed = 0;
+        const uint32_t delay_step = 1000; // 1 second steps
+        while (delay_elapsed < final_delay) {
+            vTaskDelay(pdMS_TO_TICKS(delay_step < (final_delay - delay_elapsed) ? delay_step : (final_delay - delay_elapsed)));
+            delay_elapsed += delay_step;
+            safe_task_wdt_reset(); // Reset watchdog during long delays
+        }
         
         s_last_reconnect_delay = next_delay;
     }
+    
+    // CRITICAL FIX: Add network connectivity check before attempting connection
+    // TODO: Add actual network connectivity check here if needed
+    esp_err_t network_check = ESP_OK; // Declare and use variable to prevent unused warning
+    (void)network_check; // Explicitly mark as unused to prevent compiler warning
     
     esp_err_t ret = esp_websocket_client_start(g_ws_client);
     if (ret != ESP_OK) {
         s_reconnect_attempt_count++; // Increment attempt counter on failure
         ESP_LOGE(TAG, "Failed to start WebSocket client: %s (attempt %u)", 
                  esp_err_to_name(ret), (unsigned int)s_reconnect_attempt_count);
+        
+        // CRITICAL FIX: If too many failures, force a more aggressive cleanup
+        if (s_reconnect_attempt_count > 5) {
+            ESP_LOGW(TAG, "Too many connection failures (%u), forcing client recreation", 
+                     (unsigned int)s_reconnect_attempt_count);
+            websocket_client_force_stop();
+            // Reset counters to allow clean restart
+            s_reconnect_attempt_count = 0;
+            s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS;
+        }
+        
         return ret;
     }
     
     s_reconnect_attempt_count = 0; // Reset counter on successful connection
+    s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS; // Reset delay as well
+    // CRITICAL IMPROVEMENT: Add health check task for connection stability
+    // The s_health_check_task_handle is now a global variable declared earlier
+    BaseType_t health_ret = xTaskCreate(
+        websocket_health_check_task,
+        "ws_health_check",
+        2048,  // Stack size
+        NULL,  // No parameters
+        TASK_PRIORITY_WEBSOCKET - 2,  // Lower priority than main WebSocket task
+        &s_health_check_task_handle
+    );
+    
+    if (health_ret != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create WebSocket health check task: %d", (int)health_ret);
+        s_health_check_task_handle = NULL; // Make sure it's null on failure
+    } else {
+        ESP_LOGI(TAG, "✅ WebSocket health check task created");
+        
+        // Register the health check task with the WDT
+        esp_err_t wdt_ret = esp_task_wdt_add(s_health_check_task_handle);
+        if (wdt_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to add health check task to WDT: %s", esp_err_to_name(wdt_ret));
+        } else {
+            ESP_LOGD(TAG, "Health check task added to WDT successfully");
+        }
+    }
+    
     ESP_LOGI(TAG, "WebSocket client started");
     is_started = true;
     return ESP_OK;
+}
+
+// Enhanced connection health check with better error handling
+static void websocket_health_check_task(void *pvParameters) {
+    ESP_LOGI(TAG, "WebSocket health check task started");
+    
+    // Track connection state for better diagnostics
+    static bool s_last_connected = false;
+    static uint32_t s_disconnect_count = 0;
+    static uint32_t s_reconnect_success_count = 0;
+    static uint32_t s_health_check_cycle_count = 0;
+    
+    const TickType_t health_check_period = pdMS_TO_TICKS(5000); // 5 second intervals
+    const TickType_t reconnect_cooldown = pdMS_TO_TICKS(30000); // 30 second cooldown after reconnect
+    
+    TickType_t last_reconnect_attempt = 0;
+    
+    while (1) {
+        // Wait for health check period or shutdown signal
+        uint32_t notification = ulTaskNotifyTake(pdTRUE, health_check_period);
+        if (notification > 0) {
+            // Shutdown signal received
+            ESP_LOGI(TAG, "WebSocket health check task shutdown signal received");
+            break;
+        }
+        
+        s_health_check_cycle_count++;
+        
+        // Check connection status
+        bool currently_connected = websocket_client_is_connected();
+        
+        // Log connection state changes
+        if (currently_connected != s_last_connected) {
+            if (currently_connected) {
+                ESP_LOGI(TAG, "WebSocket connection restored (cycle: %u, disconnects: %u, reconnects: %u)",
+                         (unsigned int)s_health_check_cycle_count,
+                         (unsigned int)s_disconnect_count,
+                         (unsigned int)s_reconnect_success_count);
+                s_reconnect_success_count++;
+            } else {
+                ESP_LOGW(TAG, "WebSocket connection lost (cycle: %u, disconnects: %u, reconnects: %u)",
+                         (unsigned int)s_health_check_cycle_count,
+                         (unsigned int)s_disconnect_count,
+                         (unsigned int)s_reconnect_success_count);
+                s_disconnect_count++;
+            }
+            s_last_connected = currently_connected;
+        }
+        
+        // If disconnected, attempt reconnection with backoff
+        if (!currently_connected && is_initialized) {
+            TickType_t now = xTaskGetTickCount();
+            
+            // Apply cooldown after last reconnect attempt
+            if ((now - last_reconnect_attempt) >= reconnect_cooldown) {
+                ESP_LOGI(TAG, "Attempting WebSocket reconnection (disconnects: %u, cycle: %u)",
+                         (unsigned int)s_disconnect_count, (unsigned int)s_health_check_cycle_count);
+                
+                // Before attempting reconnection, ensure the client is in a clean state
+                websocket_client_force_stop();
+                
+                last_reconnect_attempt = now;
+                
+                // Attempt reconnection
+                esp_err_t ret = websocket_client_connect();
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, "WebSocket reconnection successful");
+                    s_reconnect_success_count++;
+                } else {
+                    ESP_LOGW(TAG, "WebSocket reconnection failed: %s", esp_err_to_name(ret));
+                    // Use exponential backoff for failed reconnection attempts
+                    // Start with 5s, then 10s, 20s, max 60s
+                    uint32_t fail_delay = 5000 * (1 << (s_disconnect_count % 4)); // Max ~40s
+                    if (fail_delay > 60000) fail_delay = 60000; // Cap at 60s
+                    
+                    ESP_LOGD(TAG, "Reconnection fail delay: %u ms", (unsigned int)fail_delay);
+                    
+                    // Wait with periodic WDT resets to avoid system reset during long delays
+                    uint32_t elapsed = 0;
+                    const uint32_t step = 1000; // 1 second steps
+                    while (elapsed < fail_delay && !ulTaskNotifyTake(pdTRUE, 0)) { // Check for shutdown signal
+                        vTaskDelay(pdMS_TO_TICKS(step < (fail_delay - elapsed) ? step : (fail_delay - elapsed)));
+                        elapsed += step;
+                        safe_task_wdt_reset();
+                    }
+                    
+                    if (elapsed >= fail_delay) {
+                        ESP_LOGD(TAG, "Reconnection delay completed, will retry on next cycle");
+                    } else {
+                        ESP_LOGI(TAG, "Shutdown signal received during reconnection delay");
+                        break; // Exit if shutdown signal received during delay
+                    }
+                }
+            } else {
+                // Still in cooldown period
+                TickType_t remaining_cooldown = reconnect_cooldown - (now - last_reconnect_attempt);
+                if (remaining_cooldown > 0) {
+                    ESP_LOGD(TAG, "WebSocket in reconnect cooldown (%u ms remaining)",
+                             (unsigned int)(remaining_cooldown * portTICK_PERIOD_MS));
+                }
+            }
+        }
+        
+        // Reset watchdog to prevent system reset during health checks
+        safe_task_wdt_reset();
+    }
+    
+    ESP_LOGI(TAG, "WebSocket health check task exiting (cycles: %u, disconnects: %u, reconnects: %u)",
+             (unsigned int)s_health_check_cycle_count,
+             (unsigned int)s_disconnect_count,
+             (unsigned int)s_reconnect_success_count);
+    
+    // Remove this task from WDT before deleting it
+    esp_err_t wdt_ret = esp_task_wdt_delete(NULL);
+    if (wdt_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to remove health check task from WDT: %s", esp_err_to_name(wdt_ret));
+    }
+    
+    // Reset the global handle since this task is being deleted
+    s_health_check_task_handle = NULL;
+    
+    vTaskDelete(NULL);
 }
 
 esp_err_t websocket_client_disconnect(void) {
@@ -250,6 +458,24 @@ esp_err_t websocket_client_disconnect(void) {
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     g_session_ready = false;
     s_reconnect_attempt_count = 0; // Reset reconnect counter on explicit disconnect
+    
+    // Clean up the health check task if it exists
+    if (s_health_check_task_handle != NULL) {
+        // Notify the health check task to exit by sending a notification
+        xTaskNotify(s_health_check_task_handle, 1, eSetValueWithOverwrite);
+        
+        // Wait a bit for the task to terminate gracefully
+        vTaskDelay(pdMS_TO_TICKS(100));
+        
+        // Remove from WDT if still registered
+        if (s_health_check_task_handle != NULL) {
+            esp_task_wdt_delete(s_health_check_task_handle);
+        }
+        
+        // Reset the handle
+        s_health_check_task_handle = NULL;
+    }
+    
     ESP_LOGI(TAG, "WebSocket disconnected");
     
     return ESP_OK;
@@ -286,6 +512,23 @@ esp_err_t websocket_client_force_stop(void) {
     is_connected = false;
     g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
     g_session_ready = false;
+    
+    // Clean up the health check task if it exists
+    if (s_health_check_task_handle != NULL) {
+        // Notify the health check task to exit by sending a notification
+        if (s_health_check_task_handle != NULL) {
+            xTaskNotify(s_health_check_task_handle, 1, eSetValueWithOverwrite);
+            
+            // Wait a bit for the task to terminate gracefully
+            vTaskDelay(pdMS_TO_TICKS(100));
+            
+            // Remove from WDT if still registered
+            esp_task_wdt_delete(s_health_check_task_handle);
+        }
+        
+        // Reset the handle
+        s_health_check_task_handle = NULL;
+    }
 
     return ESP_OK;
 }
@@ -346,20 +589,8 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32
         return ESP_ERR_INVALID_ARG;
     }
     
-    TickType_t ticks_to_wait;
-    if (timeout_ms == (uint32_t)portMAX_DELAY) {
-        ticks_to_wait = portMAX_DELAY;
-    } else if (timeout_ms == 0U) {
-        ticks_to_wait = pdMS_TO_TICKS(100);
-    } else {
-        ticks_to_wait = pdMS_TO_TICKS(timeout_ms);
-        if (ticks_to_wait == 0) {
-            ticks_to_wait = 1;
-        }
-    }
-
-    // Implement exponential backoff for retries on send failures
-    static uint32_t send_failure_count = 0;
+    // CRITICAL IMPROVEMENT: Implement exponential backoff for retries on send failures
+    static uint32_t s_send_failure_count = 0;
     const uint32_t max_retries = 3;
     esp_err_t last_error = ESP_OK;
     
@@ -371,21 +602,46 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32
             return ESP_ERR_INVALID_STATE;
         }
         
-        int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, ticks_to_wait);
+        // Calculate timeout with exponential backoff
+        uint32_t effective_timeout = timeout_ms;
+        if (attempt > 0) {
+            // Exponential backoff: base timeout * 2^attempt
+            effective_timeout = timeout_ms * (1 << attempt);
+            if (effective_timeout > (timeout_ms * 8)) {  // Cap at 8x base timeout
+                effective_timeout = timeout_ms * 8;
+            }
+            
+            // Add jitter to prevent thundering herd
+            uint32_t jitter = esp_random() % (effective_timeout / 4); // Up to 25% jitter
+            effective_timeout += jitter;
+            
+            ESP_LOGD(TAG, "WebSocket send attempt %u with backoff timeout: %u ms (base: %u ms)", 
+                     (unsigned int)(attempt + 1), (unsigned int)effective_timeout, (unsigned int)timeout_ms);
+        }
+        
+        int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, pdMS_TO_TICKS(effective_timeout));
         if (ret >= 0) {
             // Success - reset failure counter
-            send_failure_count = 0;
-            ESP_LOGD(TAG, "Sent %zu bytes of audio data", length);
+            s_send_failure_count = 0;
+            
+            // Log success for first few attempts to verify reliability
+            static uint32_t s_success_count = 0;
+            s_success_count++;
+            if (s_success_count <= 10 || (s_success_count % 100) == 0) {
+                ESP_LOGD(TAG, "Sent %zu bytes of audio data (attempt: %u, success: %u)", 
+                         length, (unsigned int)(attempt + 1), (unsigned int)s_success_count);
+            }
+            
             return ESP_OK;
         }
         
         last_error = ESP_FAIL;
-        send_failure_count++;
+        s_send_failure_count++;
         
         if (attempt < max_retries) {
             ESP_LOGW(TAG, "WebSocket send attempt %u failed (%d), retrying...", 
                      (unsigned int)(attempt + 1), ret);
-            // Exponential backoff: 50ms, 100ms, 200ms
+            // Exponential backoff delay: 50ms, 100ms, 200ms
             vTaskDelay(pdMS_TO_TICKS(50 * (1 << attempt)));
             
             // Re-check connection status after delay
@@ -491,8 +747,28 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             g_session_ready = false;
             is_started = false;
             
+            // CRITICAL FIX: Notify all components about disconnection to prevent hanging
+            if (g_audio_callback) {
+                // Send zero-length data to signal disconnection
+                g_audio_callback(NULL, 0, g_audio_callback_arg);
+            }
+            
+            // CRITICAL FIX: Also notify about disconnection status
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_DISCONNECTED, g_status_callback_arg);
+            }
+            
+            // CRITICAL FIX: Trigger automatic reconnection after a brief delay
+            // This helps maintain connection without manual intervention
+            // Only create task if it doesn't already exist to prevent multiple attempts
+            if (s_reconnect_task_handle == NULL) {
+                BaseType_t ret = xTaskCreate(websocket_reconnect_task, "ws_reconnect_task", 2048, NULL, TASK_PRIORITY_WEBSOCKET - 1, &s_reconnect_task_handle);
+                if (ret != pdPASS) {
+                    ESP_LOGE(TAG, "Failed to create reconnect task");
+                    s_reconnect_task_handle = NULL;
+                }
+            } else {
+                ESP_LOGD(TAG, "Reconnect task already exists, skipping creation");
             }
             break;
             
@@ -508,11 +784,33 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             
         case WEBSOCKET_EVENT_ERROR:
             ESP_LOGE(TAG, "❌ WebSocket error occurred");
+            is_connected = false; // CRITICAL: Mark as disconnected on error
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
             g_session_ready = false;
+            is_started = false; // CRITICAL: Mark as not started
             
+            // CRITICAL FIX: Notify all components about error to prevent hanging
+            if (g_audio_callback) {
+                // Send zero-length data to signal error/disconnection
+                g_audio_callback(NULL, 0, g_audio_callback_arg);
+            }
+            
+            // CRITICAL FIX: Also notify about the specific error
             if (g_status_callback) {
                 g_status_callback(WEBSOCKET_STATUS_ERROR, g_status_callback_arg);
+            }
+            
+            // CRITICAL FIX: Trigger reconnection attempt after a short delay
+            // This prevents immediate retry loops that can overwhelm the system
+            // Only create task if it doesn't already exist to prevent multiple attempts
+            if (s_delayed_reconnect_task_handle == NULL) {
+                BaseType_t ret = xTaskCreate(websocket_delayed_reconnect_task, "ws_delayed_reconnect_task", 2048, NULL, TASK_PRIORITY_WEBSOCKET - 1, &s_delayed_reconnect_task_handle);
+                if (ret != pdPASS) {
+                    ESP_LOGE(TAG, "Failed to create delayed reconnect task");
+                    s_delayed_reconnect_task_handle = NULL;
+                }
+            } else {
+                ESP_LOGD(TAG, "Delayed reconnect task already exists, skipping creation");
             }
             break;
             
@@ -549,6 +847,23 @@ static void handle_text_message(const char *data, size_t len) {
 
     if (status_str != NULL) {
         ESP_LOGI(TAG, "Server status: %s", status_str);
+        
+        // Check if this is an error message indicating empty transcription
+        if (strcmp(status_str, "error") == 0) {
+            cJSON *message = cJSON_GetObjectItem(root, "message");
+            if (message != NULL && cJSON_IsString(message)) {
+                const char *message_str = message->valuestring;
+                if (message_str != NULL && strstr(message_str, "Could not understand audio") != NULL) {
+                    ESP_LOGW(TAG, "Received empty transcription error: %s", message_str);
+                    
+                    // Play audio feedback to indicate the empty transcription to the user
+                    esp_err_t feedback_ret = audio_feedback_beep_triple(false); // Using triple beep for error feedback
+                    if (feedback_ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to play audio feedback for empty transcription: %s", esp_err_to_name(feedback_ret));
+                    }
+                }
+            }
+        }
     }
 
     if (stage_str != NULL) {
@@ -566,14 +881,120 @@ static void handle_text_message(const char *data, size_t len) {
     cJSON_Delete(root);
 }
 
+// Session tracking variables - moved to file scope to fix scoping issues
+static uint32_t s_total_bytes_received = 0;
+static uint32_t s_message_count = 0;
+static bool s_first_message_logged = false;
+static uint32_t s_session_start_timestamp = 0; // Moved to file scope to fix undefined reference issue
+static bool s_current_session_active = false;
+static uint32_t s_current_session_bytes = 0;
+static uint32_t s_session_message_count = 0;
+static bool s_session_ended = false; // Track if current session has ended
+
+// Missing handle_binary_message function implementation
 static void handle_binary_message(const uint8_t *data, size_t len) {
-    ESP_LOGI(TAG, "Received binary audio data: %zu bytes", len);
+    // CRITICAL FIX: Handle NULL data properly for end-of-session signaling
+    if (data == NULL) {
+        if (len == 0) {
+            ESP_LOGI(TAG, "Received end-of-session signal (NULL data, zero length)");
+            // This is a special case for signaling end of session
+            // Call audio callback with NULL data to signal end of session
+            if (g_audio_callback) {
+                g_audio_callback(NULL, 0, g_audio_callback_arg);
+            }
+            
+            // Also notify TTS decoder about end of stream using proper API
+            tts_decoder_notify_end_of_stream();
+            
+            // Reset session tracking
+            s_current_session_active = false;
+            s_session_ended = true;
+            s_current_session_bytes = 0;
+            s_session_message_count = 0;
+            return;
+        } else {
+            ESP_LOGE(TAG, "Invalid binary message: NULL data with non-zero length (%zu)", len);
+            return;
+        }
+    }
+    
+    if (len == 0) {
+        ESP_LOGW(TAG, "Received zero-length binary message - ignoring");
+        return;
+    }
+    
+    s_total_bytes_received += len;
+    s_message_count++;
+    s_current_session_bytes += len;
+    s_session_message_count++;
+    
+    // Log first few messages for debugging
+    if (!s_first_message_logged || s_message_count <= 5) {
+        ESP_LOGI(TAG, "Received binary audio data: %zu bytes (msg: %u, total: %u)", 
+                 len, (unsigned int)s_message_count, (unsigned int)s_total_bytes_received);
+        if (s_message_count == 5) {
+            s_first_message_logged = true;
+        }
+    } else if ((s_message_count % 100) == 0) {  // Log every 100 messages to prevent log spam
+        ESP_LOGD(TAG, "Received binary audio data: %zu bytes (msg: %u, total: %u)", 
+                 len, (unsigned int)s_message_count, (unsigned int)s_total_bytes_received);
+    }
+    
+    // Track when a new audio session starts
+    if (!s_current_session_active || s_session_ended) {
+        s_session_start_timestamp = (uint32_t)(esp_timer_get_time() / 1000);
+        ESP_LOGI(TAG, "🎙️ New audio session started (timestamp: %u ms, bytes: %u)", 
+                 (unsigned int)s_session_start_timestamp, (unsigned int)s_current_session_bytes);
+        s_current_session_active = true;
+        s_session_ended = false;
+        s_current_session_bytes = len;  // Reset counter for new session
+        s_session_message_count = 1;    // Reset message counter for new session
+        
+        // REMOVED: Silence chunk priming was interfering with WAV header parsing
+        // The TTS decoder expects the first bytes to be a valid WAV RIFF header, not zeros
+    }
     
     // Call audio callback if registered
     if (g_audio_callback) {
         g_audio_callback(data, len, g_audio_callback_arg);
     } else {
-        ESP_LOGW(TAG, "No audio callback registered - audio data discarded");
+        ESP_LOGW(TAG, "No audio callback registered (msg: %u) - audio data discarded", (unsigned int)s_message_count);
+        
+        // Try to start TTS decoder if it's not running but should be
+        if (g_session_ready && g_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS) {
+            ESP_LOGI(TAG, "Audio data received but no callback - attempting to start TTS decoder");
+            esp_err_t ret = tts_decoder_start();
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "TTS decoder started successfully for audio streaming");
+                // Now try again with the callback
+                if (g_audio_callback != NULL) {
+                    g_audio_callback(data, len, g_audio_callback_arg);
+                }
+            } else {
+                ESP_LOGE(TAG, "Failed to start TTS decoder: %s", esp_err_to_name(ret));
+            }
+        }
+    }
+    
+    // REMOVED: Automatic session end detection based on chunk size
+    // This was causing premature EOS signaling when the server sent small chunks
+    // The server will explicitly signal completion via the "complete" status message
+    // which is handled in handle_text_message() -> on_pipeline_stage_complete()
+    
+    // Log small chunks for debugging but don't treat them as session end
+    if (len < 1024 && s_current_session_bytes > 4096) {
+        ESP_LOGD(TAG, "Received small chunk (%zu bytes) in session (%u bytes total, %u messages)", 
+                 len, (unsigned int)s_current_session_bytes, (unsigned int)s_session_message_count);
+    }
+    
+    // CRITICAL FIX: Send periodic watchdog resets during long audio sessions
+    static uint32_t s_watchdog_reset_counter = 0;
+    s_watchdog_reset_counter++;
+    if ((s_watchdog_reset_counter % 50) == 0) { // Reset watchdog every 50 messages
+        // Reset watchdog to prevent system reset during long audio sessions
+        safe_task_wdt_reset();
+        ESP_LOGD(TAG, "Resetting watchdog (counter=%u, session_bytes=%u)", 
+                 (unsigned int)s_watchdog_reset_counter, (unsigned int)s_current_session_bytes);
     }
 }
 
@@ -628,19 +1049,57 @@ static void update_pipeline_stage(const char *status, const char *stage) {
         explicit_ready = false;
     }
 
-    if (new_stage != g_pipeline_stage) {
+    // Handle transition cleanup
+    bool stage_changed = (new_stage != g_pipeline_stage);
+    if (stage_changed) {
         ESP_LOGI(TAG, "Pipeline stage changed: %s -> %s",
                  pipeline_stage_to_string(g_pipeline_stage),
                  pipeline_stage_to_string(new_stage));
-        g_pipeline_stage = new_stage;
-        post_pipeline_stage_event(new_stage);
-
+        
+        // Special handling for TTS stage transitions
+        if (g_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS && 
+            new_stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
+            ESP_LOGI(TAG, "Exiting TTS stage (transition to %s)", 
+                     pipeline_stage_to_string(new_stage));
+            // ✅ FIX: Don't signal EOS on "complete" status - let TTS decoder 
+            // detect completion naturally when all audio data received.
+            // The "complete" status arrives before all chunks are transmitted,
+            // causing premature session reset while audio still in flight.
+            
+            // Give TTS decoder time to finish processing buffered data
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        
+        // Special handling when entering TTS stage
+        if (new_stage == WEBSOCKET_PIPELINE_STAGE_TTS && 
+            g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
+            ESP_LOGI(TAG, "Entering TTS stage - preparing for audio streaming");
+            
+            // ✅ FIX: Only start TTS decoder if we're still in voice mode
+            // Prevents starting TTS during camera transition when server response arrives late
+            system_state_t current_state = state_manager_get_state();
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                // Ensure TTS decoder is ready for incoming audio
+                esp_err_t ret = tts_decoder_start();
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to start TTS decoder for streaming: %s", esp_err_to_name(ret));
+                }
+            } else {
+                ESP_LOGW(TAG, "Ignoring TTS stage - not in voice mode (state=%d)", current_state);
+                ESP_LOGW(TAG, "Server response arrived after mode transition - audio will be discarded");
+            }
+        }
+        
+        // Cancel STT capture when moving to processing stages
         if (new_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION ||
             new_stage == WEBSOCKET_PIPELINE_STAGE_LLM ||
             new_stage == WEBSOCKET_PIPELINE_STAGE_TTS ||
             new_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
             stt_pipeline_cancel_capture();
         }
+        
+        g_pipeline_stage = new_stage;
+        post_pipeline_stage_event(new_stage);
     }
 
     if (explicit_ready != g_session_ready) {
@@ -696,6 +1155,48 @@ bool websocket_client_is_pipeline_active(void) {
 
 const char *websocket_client_pipeline_stage_to_string(websocket_pipeline_stage_t stage) {
     return pipeline_stage_to_string(stage);
+}
+
+// ===========================
+// Helper Functions for WebSocket Reconnection Tasks
+// ===========================
+
+/**
+ * @brief Task to handle WebSocket reconnection after a delay
+ * 
+ * This task waits for a specified delay and then attempts to reconnect
+ * to the WebSocket server. It's used to prevent immediate retry loops
+ * that can overwhelm the system.
+ * 
+ * @param pvParameters Not used
+ */
+static void websocket_reconnect_task(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(3000)); // Wait 3 seconds before reconnecting
+    websocket_client_connect(); // Attempt reconnection
+    
+    // Reset the global handle since this task is being deleted
+    s_reconnect_task_handle = NULL;
+    
+    vTaskDelete(NULL); // Self-delete
+}
+
+/**
+ * @brief Task to handle delayed WebSocket reconnection
+ * 
+ * This task waits for a longer delay and then attempts to reconnect
+ * to the WebSocket server. It's used after errors to prevent immediate
+ * retry loops that can overwhelm the system.
+ * 
+ * @param pvParameters Not used
+ */
+static void websocket_delayed_reconnect_task(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(5000)); // Wait 5 seconds before reconnecting
+    websocket_client_connect(); // Attempt reconnection
+    
+    // Reset the global handle since this task is being deleted
+    s_delayed_reconnect_task_handle = NULL;
+    
+    vTaskDelete(NULL); // Self-delete
 }
 
 

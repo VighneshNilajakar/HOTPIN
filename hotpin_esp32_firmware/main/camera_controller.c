@@ -42,7 +42,7 @@ esp_err_t camera_controller_init(void) {
         .pixel_format = PIXFORMAT_JPEG,
         .frame_size = FRAMESIZE_VGA,
         .jpeg_quality = 12,
-        .fb_count = 2,
+        .fb_count = 1,  // ✅ FIX: Reduced from 2 to 1 to free ~61KB PSRAM for I2S DMA buffers
         .fb_location = CAMERA_FB_IN_PSRAM,
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY
     };

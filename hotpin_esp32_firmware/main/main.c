@@ -252,28 +252,36 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "WebSocket connection task created on Core 0");
     
-    // Initialize task watchdog (30 second timeout)
-    ESP_LOGI(TAG, "Initializing task watchdog (30s timeout)...");
-    esp_task_wdt_config_t wdt_config = {
-        .timeout_ms = 30000,  // 30 seconds
-        .idle_core_mask = 0,  // Don't watch idle tasks
-        .trigger_panic = true  // Panic on timeout
-    };
-
-    // Ensure prior watchdog instances are cleared to avoid duplicate init warnings.
-    esp_task_wdt_deinit();
-    ESP_ERROR_CHECK(esp_task_wdt_init(&wdt_config));
+    // ===========================
+    // Task Watchdog Configuration
+    // ===========================
+    // Note: The TWDT is automatically initialized by ESP-IDF startup code.
+    // We just need to add our tasks to it, not reinitialize it.
+    ESP_LOGI(TAG, "Configuring task watchdog for critical tasks...");
     
-    // Subscribe state manager task
+    // Add state manager task to WDT
     if (g_state_manager_task_handle != NULL) {
         ret = esp_task_wdt_add(g_state_manager_task_handle);
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "State manager task added to watchdog");
+            ESP_LOGI(TAG, "✅ State manager task added to watchdog");
         } else {
             ESP_LOGW(TAG, "Failed to add state manager to watchdog: %s", 
                      esp_err_to_name(ret));
         }
     }
+    
+    // Add WebSocket connection task to WDT
+    if (g_websocket_task_handle != NULL) {
+        ret = esp_task_wdt_add(g_websocket_task_handle);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "✅ WebSocket connection task added to watchdog");
+        } else {
+            ESP_LOGW(TAG, "Failed to add WebSocket task to watchdog: %s", 
+                     esp_err_to_name(ret));
+        }
+    }
+    
+    ESP_LOGI(TAG, "Task watchdog configuration complete");
     
     // WebSocket task now runs continuously; state manager handles camera/audio
     
@@ -543,6 +551,9 @@ static void websocket_connection_task(void *pvParameters) {
                     break;
                 }
 
+                // Reset watchdog timer to prevent timeout
+                esp_task_wdt_reset();
+                
                 vTaskDelay(pdMS_TO_TICKS(2000));
             }
 
@@ -559,12 +570,19 @@ static void websocket_connection_task(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(500));
         }
         
-        // Check for system shutdown state
+            // Check for system shutdown state
         current_state = state_manager_get_state();
         if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
             ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
             break;
         }
+    }
+    
+    // Unregister from watchdog before task deletion
+    ESP_LOGI(TAG, "Unregistering WebSocket connection task from watchdog");
+    esp_err_t wdt_ret = esp_task_wdt_delete(NULL);  // NULL = current task
+    if (wdt_ret != ESP_OK && wdt_ret != ESP_ERR_INVALID_ARG) {
+        ESP_LOGW(TAG, "Failed to unregister ws_connect task from watchdog: %s", esp_err_to_name(wdt_ret));
     }
     
     ESP_LOGI(TAG, "WebSocket connection task terminated");
