@@ -250,39 +250,85 @@ esp_err_t audio_driver_write(const uint8_t *data, size_t size, size_t *bytes_wri
     
     // Perform I2S channel write operation (protected by mutex)
     // Modern driver uses i2s_channel_write() instead of i2s_write()
-    size_t written = 0;
-    TickType_t ticks_to_wait;
-    if (timeout_ms == (uint32_t)portMAX_DELAY) {
-        ticks_to_wait = portMAX_DELAY;
-    } else {
-        ticks_to_wait = pdMS_TO_TICKS(timeout_ms);
-    }
-    
-    esp_err_t ret = i2s_channel_write(g_i2s_tx_handle, data, size, &written, ticks_to_wait);
-    
-    // Release mutex immediately after hardware access
-    xSemaphoreGive(g_i2s_access_mutex);
-    
-    if (bytes_written) {
-        *bytes_written = written;
-    }
-    
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S channel write failed: %s (requested=%zu bytes, wrote=%zu)",
-                 esp_err_to_name(ret), size, written);
-        return ret;
-    }
-    
-    if (written < size) {
-        ESP_LOGW(TAG, "Partial write: %zu/%zu bytes", written, size);
+    size_t total_written = 0;
+    esp_err_t last_err = ESP_OK;
+
+    TickType_t overall_timeout_ticks = (timeout_ms == (uint32_t)portMAX_DELAY)
+                                           ? portMAX_DELAY
+                                           : pdMS_TO_TICKS(timeout_ms);
+    TickType_t start_tick = xTaskGetTickCount();
+
+    while (total_written < size) {
+        const uint8_t *chunk_ptr = data + total_written;
+        size_t remaining = size - total_written;
+        size_t written_this_iter = 0;
+
+        TickType_t ticks_to_wait = overall_timeout_ticks;
+        if (overall_timeout_ticks != portMAX_DELAY) {
+            TickType_t elapsed = xTaskGetTickCount() - start_tick;
+            if (elapsed >= overall_timeout_ticks) {
+                last_err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            ticks_to_wait = overall_timeout_ticks - elapsed;
+            if (ticks_to_wait == 0) {
+                ticks_to_wait = 1;
+            }
+        }
+
+        esp_err_t ret = i2s_channel_write(g_i2s_tx_handle, chunk_ptr, remaining, &written_this_iter, ticks_to_wait);
+
+        if (ret == ESP_OK) {
+            last_err = ESP_OK;
+        }
+
+        if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
+            last_err = ret;
+            break;
+        }
+
+        total_written += written_this_iter;
+
+        if (ret == ESP_ERR_TIMEOUT) {
+            last_err = ESP_ERR_TIMEOUT;
+            if (written_this_iter == 0) {
+                break;
+            }
+            continue;
+        }
+
+        if (written_this_iter == 0) {
+            last_err = ESP_ERR_TIMEOUT;
+            break;
+        }
     }
 
-    if (s_write_log_count < WRITE_DEBUG_LOG_LIMIT || written < size) {
-        ESP_LOGD(TAG, "[WRITE] call=%u requested=%zu bytes wrote=%zu timeout_ms=%lu", (unsigned int)(++s_write_log_count), size, written, (unsigned long)timeout_ms);
+    // Release mutex immediately after hardware access
+    xSemaphoreGive(g_i2s_access_mutex);
+
+    if (bytes_written) {
+        *bytes_written = total_written;
+    }
+
+    if (total_written < size) {
+        ESP_LOGW(TAG, "Partial write: %zu/%zu bytes (err=%s)", total_written, size, esp_err_to_name(last_err));
+        if (last_err == ESP_OK) {
+            last_err = ESP_ERR_TIMEOUT;
+        }
+    }
+
+    if (s_write_log_count < WRITE_DEBUG_LOG_LIMIT || total_written < size) {
+        ESP_LOGD(TAG, "[WRITE] call=%u requested=%zu bytes wrote=%zu timeout_ms=%lu", (unsigned int)(++s_write_log_count), size, total_written, (unsigned long)timeout_ms);
     } else {
         ++s_write_log_count;
     }
-    
+
+    if (total_written < size) {
+        ESP_LOGE(TAG, "I2S channel write incomplete: %s (requested=%zu bytes, wrote=%zu)",
+                 esp_err_to_name(last_err), size, total_written);
+        return last_err;
+    }
+
     return ESP_OK;
 }
 

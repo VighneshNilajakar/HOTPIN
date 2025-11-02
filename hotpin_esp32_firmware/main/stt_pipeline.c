@@ -331,14 +331,22 @@ esp_err_t stt_pipeline_stop(void) {
     stt_pipeline_mark_stopped();
 
     // CRITICAL: Drain the ring buffer to prevent data carryover to next session
+    // Also clear any accumulated data in PSRAM to prevent fragmentation
     if (g_ring_buffer_count > 0) {
         ESP_LOGI(TAG, "Draining ring buffer (%zu bytes pending) before shutdown...", (unsigned int)g_ring_buffer_count);
         xSemaphoreTake(g_ring_buffer_mutex, portMAX_DELAY);
+        
+        // Zero out the ring buffer to clear accumulated audio data and reduce PSRAM fragmentation
+        // This is critical because PSRAM fragmentation can occur from repeated audio sessions
+        if (g_audio_ring_buffer != NULL) {
+            memset(g_audio_ring_buffer, 0, g_ring_buffer_size);
+        }
+        
         g_ring_buffer_write_pos = 0;
         g_ring_buffer_read_pos = 0;
         g_ring_buffer_count = 0;
         xSemaphoreGive(g_ring_buffer_mutex);
-        ESP_LOGI(TAG, "Ring buffer drained successfully");
+        ESP_LOGI(TAG, "Ring buffer drained and cleared successfully");
     }
 
     TickType_t deadline_ticks = xTaskGetTickCount() + pdMS_TO_TICKS(STT_TASK_STOP_WAIT_MS);
@@ -932,12 +940,19 @@ static void stt_pipeline_reset_ring_buffer(void) {
 
     if (g_ring_buffer_mutex != NULL) {
         if (xSemaphoreTake(g_ring_buffer_mutex, pdMS_TO_TICKS(50))) {
+            // CRITICAL FIX: Zero out ring buffer data to prevent PSRAM fragmentation
+            // Accumulated audio data across sessions can cause fragmentation in PSRAM
+            // Clearing ensures clean memory state for next session
+            memset(g_audio_ring_buffer, 0, g_ring_buffer_size);
+            
             g_ring_buffer_write_pos = 0;
             g_ring_buffer_read_pos = 0;
             g_ring_buffer_count = 0;
             xSemaphoreGive(g_ring_buffer_mutex);
         }
     } else {
+        // Clear buffer even without mutex (shouldn't happen but safe)
+        memset(g_audio_ring_buffer, 0, g_ring_buffer_size);
         g_ring_buffer_write_pos = 0;
         g_ring_buffer_read_pos = 0;
         g_ring_buffer_count = 0;

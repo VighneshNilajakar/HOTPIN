@@ -248,6 +248,11 @@ esp_err_t tts_decoder_start(void) {
     playback_start_time = (uint32_t)(esp_timer_get_time() / 1000);
     memset(&wav_info, 0, sizeof(wav_info));
 
+    // Ensure no stale PCM data remains from a previous session
+    if (g_audio_stream_buffer != NULL) {
+        xStreamBufferReset(g_audio_stream_buffer);
+    }
+
     // CRITICAL FIX: Move TTS playback task to Core 1 to prevent Core 0 starvation
     // Core 0 handles WiFi/TCP and STT input, Core 1 handles state management and TTS output
     // IMPORTANT: Add safety padding to prevent buffer overflows
@@ -372,6 +377,18 @@ esp_err_t tts_decoder_stop(void) {
     // Clear the stream buffer to prevent data carryover
     if (g_audio_stream_buffer != NULL) {
         xStreamBufferReset(g_audio_stream_buffer);
+    }
+    
+    // CRITICAL FIX: Free stereo scratch buffer after each TTS session to prevent DMA fragmentation
+    // The 8KB scratch buffer was never freed between sessions, causing severe DMA-capable RAM fragmentation
+    // Logs show DMA fragmentation going from 46% → 51% → 63% over multiple sessions
+    // This buffer is only needed during active mono→stereo conversion, not between sessions
+    if (s_stereo_scratch != NULL) {
+        ESP_LOGI(TAG, "Freeing stereo scratch buffer (%zu bytes) to reduce fragmentation", s_stereo_scratch_size);
+        heap_caps_free(s_stereo_scratch);
+        s_stereo_scratch = NULL;
+        s_stereo_scratch_size = 0;
+        s_stereo_scratch_capacity_samples = 0;
     }
     
     ESP_LOGI(TAG, "⏹️ TTS decoder stopped (played %zu bytes)", pcm_bytes_played);
@@ -820,6 +837,25 @@ static void tts_playback_task(void *pvParameters) {
         heap_caps_free(dma_buffer);
         dma_buffer = NULL;
         ESP_LOGI(TAG, "  ✓ DMA buffer freed from PSRAM");
+    }
+    
+    // CRITICAL FIX: Free stereo scratch buffer on task exit to prevent DMA fragmentation
+    // This ensures the buffer is freed even if tts_decoder_stop() wasn't called properly
+    if (s_stereo_scratch != NULL) {
+        ESP_LOGI(TAG, "  ✓ Freeing stereo scratch buffer (%zu bytes) on task exit", s_stereo_scratch_size);
+        heap_caps_free(s_stereo_scratch);
+        s_stereo_scratch = NULL;
+        s_stereo_scratch_size = 0;
+        s_stereo_scratch_capacity_samples = 0;
+    }
+    
+    // Clear stream buffer to prevent data accumulation between sessions
+    if (g_audio_stream_buffer != NULL) {
+        size_t buffer_remaining = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+        if (buffer_remaining > 0) {
+            ESP_LOGI(TAG, "  ✓ Clearing %zu bytes from stream buffer", buffer_remaining);
+            xStreamBufferReset(g_audio_stream_buffer);
+        }
     }
     
     // ✅ FIX #1: Unregister from watchdog BEFORE setting any completion flags
@@ -1361,10 +1397,14 @@ static bool ensure_stereo_scratch_buffer(void) {
         return true;
     }
 
-    uint8_t *buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    // CRITICAL FIX: Always allocate stereo scratch buffer in PSRAM to prevent internal DMA fragmentation
+    // Internal DMA-capable RAM is only ~60KB and gets severely fragmented when this 8KB buffer is allocated
+    // PSRAM has 4MB available and doesn't suffer from the same fragmentation issues
+    uint8_t *buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_SPIRAM);
     if (buf == NULL) {
-        ESP_LOGW(TAG, "Stereo scratch aligned alloc failed (%u) - attempting PSRAM", (unsigned int)CONFIG_TTS_STEREO_SCRATCH_BYTES);
-        buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
+        // Fallback to internal DMA only if PSRAM allocation fails (shouldn't happen with 4MB PSRAM)
+        ESP_LOGW(TAG, "PSRAM allocation failed - attempting internal DMA (may cause fragmentation)");
+        buf = heap_caps_aligned_alloc(4, CONFIG_TTS_STEREO_SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     }
 
     if (buf == NULL) {
@@ -1384,7 +1424,7 @@ static bool ensure_stereo_scratch_buffer(void) {
         return false;
     }
 
-    ESP_LOGI(TAG, "[PCM DUP] Scratch buffer ready: %zu bytes (%zu samples per block)",
+    ESP_LOGI(TAG, "[PCM DUP] Scratch buffer ready: %zu bytes (%zu samples per block) in PSRAM",
              s_stereo_scratch_size, s_stereo_scratch_capacity_samples);
     return true;
 }
