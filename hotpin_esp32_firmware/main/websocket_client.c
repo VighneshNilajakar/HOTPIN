@@ -32,10 +32,12 @@
 static const char *TAG = TAG_WEBSOCKET;
 
 // Safe watchdog reset function to prevent errors when task is not registered
+// ✅ IMPROVED: Suppress common benign errors (ESP_ERR_NOT_FOUND, ESP_ERR_INVALID_ARG)
+// These occur during task shutdown and are not actual errors
 static inline void safe_task_wdt_reset(void) {
     esp_err_t ret = esp_task_wdt_reset();
-    if (ret != ESP_OK) {
-        // Only log at detailed level to avoid spam
+    // Only log unexpected errors - suppress benign shutdown race conditions
+    if (ret != ESP_OK && ret != ESP_ERR_NOT_FOUND && ret != ESP_ERR_INVALID_ARG) {
         ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
     }
 }

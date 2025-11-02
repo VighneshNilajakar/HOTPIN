@@ -55,6 +55,16 @@ esp_err_t tts_decoder_stop(void);
 bool tts_decoder_is_playing(void);
 
 /**
+ * @brief Check if TTS is currently receiving audio data from server
+ * 
+ * Returns true if the TTS decoder is actively receiving audio chunks via WebSocket.
+ * This is useful for preventing mode transitions while audio is being streamed.
+ * 
+ * @return true if actively receiving audio, false otherwise
+ */
+bool tts_decoder_is_receiving_audio(void);
+
+/**
  * @brief Query whether buffered audio is still pending playback
  *
  * @return true when queued audio remains to be rendered

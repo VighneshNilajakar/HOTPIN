@@ -165,15 +165,25 @@ esp_err_t feedback_player_play(feedback_sound_t sound) {
     }
 
     if (!driver_was_initialized) {
-        // ✅ FIX #12: Check DMA-capable memory before attempting audio driver init
-        // I2S driver needs ~8-10KB of DMA memory for buffers
-        // If insufficient memory, skip feedback gracefully instead of failing
+        // ✅ FIX #3: Check BOTH total DMA memory AND largest contiguous block
+        // I2S full-duplex driver needs: TX (~8KB) + RX (~8KB) + overhead = ~18KB total
+        // High fragmentation can cause init failure even with sufficient total memory
+        // Check largest block to ensure contiguous allocation succeeds
         size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
-        const size_t MIN_DMA_REQUIRED = 20480; // 20KB minimum (with safety margin)
+        size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+        const size_t MIN_DMA_TOTAL = 20480;     // 20KB total minimum
+        const size_t MIN_DMA_CONTIGUOUS = 16384; // 16KB contiguous block minimum
         
-        if (dma_free < MIN_DMA_REQUIRED) {
+        if (dma_free < MIN_DMA_TOTAL) {
             ESP_LOGW(TAG, "Insufficient DMA memory for audio driver (%zu bytes free, need %zu) - skipping feedback",
-                     dma_free, MIN_DMA_REQUIRED);
+                     dma_free, MIN_DMA_TOTAL);
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        
+        if (largest_block < MIN_DMA_CONTIGUOUS) {
+            ESP_LOGW(TAG, "DMA memory too fragmented for audio driver (largest block: %zu bytes, need %zu) - skipping feedback",
+                     largest_block, MIN_DMA_CONTIGUOUS);
             ret = ESP_ERR_NO_MEM;
             goto cleanup;
         }

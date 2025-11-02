@@ -68,11 +68,12 @@ static esp_err_t audio_feedback_emit_beep(bool allow_temp_driver) {
             return ESP_ERR_INVALID_STATE;
         }
         
-        // ✅ FIX #12: Check DMA-capable memory before attempting audio driver init
-        // I2S driver needs ~8-10KB of DMA memory for buffers
-        // If insufficient memory, skip feedback gracefully instead of failing
+        // ✅ FIX #13: Check DMA-capable memory before attempting audio driver init
+        // I2S full-duplex driver needs: TX (~8KB) + RX (~8KB) + overhead = ~18KB total
+        // Testing shows 27KB passes initial check but fails on RX allocation
+        // Increased threshold to 32KB for reliable full-duplex initialization
         size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
-        const size_t MIN_DMA_REQUIRED = 20480; // 20KB minimum (with safety margin)
+        const size_t MIN_DMA_REQUIRED = 32768; // 32KB minimum (was 20KB, insufficient)
         
         if (dma_free < MIN_DMA_REQUIRED) {
             ESP_LOGW(TAG, "Insufficient DMA memory for audio driver (%zu bytes free, need %zu) - skipping feedback",

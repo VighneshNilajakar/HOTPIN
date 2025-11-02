@@ -21,6 +21,7 @@
 #include "led_controller.h"
 #include "event_dispatcher.h"
 #include "system_events.h"
+#include "memory_manager.h"
 #include "esp_camera.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
@@ -43,10 +44,12 @@ static bool s_tts_playback_active = false;
 static bool s_transition_scheduled = false;
 
 // Safe watchdog reset function to prevent errors when task is not registered
+// ✅ IMPROVED: Suppress common benign errors (ESP_ERR_NOT_FOUND, ESP_ERR_INVALID_ARG)
+// These occur during task shutdown and are not actual errors
 static inline void safe_task_wdt_reset(void) {
     esp_err_t ret = esp_task_wdt_reset();
-    if (ret != ESP_OK) {
-        // Only log at detailed level to avoid spam
+    // Only log unexpected errors - suppress benign shutdown race conditions
+    if (ret != ESP_OK && ret != ESP_ERR_NOT_FOUND && ret != ESP_ERR_INVALID_ARG) {
         ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
     }
 }
@@ -223,6 +226,13 @@ system_state_t state_manager_get_state(void) {
 }
 
 static bool is_voice_pipeline_active(void) {
+    // ✅ FIX #1: Exclude WEBSOCKET_PIPELINE_STAGE_COMPLETE from busy detection
+    // "complete" means server finished processing - pipeline is NOT busy
+    // This was causing guardrails to block button presses after voice responses
+    if (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+        return false;
+    }
+    
     return websocket_client_is_pipeline_active() ||
            (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS) ||
            (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_LLM) ||
@@ -277,15 +287,32 @@ static bool guardrails_should_block_button(button_event_type_t type) {
         return true;
     }
 
-    // For voice active state, be more restrictive about transitions during pipeline operations
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE && guardrails_is_pipeline_busy()) {
-        if (type == BUTTON_EVENT_SINGLE_CLICK) {
-            // Allow single click to stop voice pipeline but with warning
-            ESP_LOGW(TAG, "Guardrail soft override: stopping voice pipeline while busy");
-        } else if (type == BUTTON_EVENT_DOUBLE_CLICK) {
-            // Block double click during voice pipeline activity
-            guardrails_signal_block("audio pipeline busy - blocking capture");
+    // ✅ FIX: Block mode transitions while TTS audio is actively streaming from server
+    // This prevents audio interruption when user gets impatient and presses button
+    // before LLM response arrives (typical 6-10 second delay)
+    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        // Check if TTS is receiving audio - if so, block ALL mode transitions
+        if (tts_decoder_is_receiving_audio()) {
+            ESP_LOGW(TAG, "⏳ TTS audio streaming in progress - please wait for response to finish");
+            guardrails_signal_block("TTS audio currently streaming");
+            // Play error beep to provide user feedback
+            esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+            if (beep_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+            }
             return true;
+        }
+        
+        // If no audio is streaming but pipeline is busy, allow cancellation with warning
+        if (guardrails_is_pipeline_busy()) {
+            if (type == BUTTON_EVENT_SINGLE_CLICK) {
+                // Allow single click to stop voice pipeline (user cancellation)
+                ESP_LOGW(TAG, "Guardrail soft override: stopping voice pipeline (user cancellation)");
+            } else if (type == BUTTON_EVENT_DOUBLE_CLICK) {
+                // Block double click during voice pipeline activity
+                guardrails_signal_block("audio pipeline busy - blocking capture");
+                return true;
+            }
         }
     }
 
@@ -695,8 +722,10 @@ static void wait_for_voice_pipeline_shutdown(void) {
                 break;
             }
             
-            // Wait for TTS decoder to become idle with a 200ms timeout
-            esp_err_t wait_ret = tts_decoder_wait_for_idle(200);
+            // ✅ FIX #15: Increased timeout from 200ms to 500ms to reduce false timeout warnings
+            // With 50ms check interval (Fix #14), 200ms only allows 4 checks
+            // 500ms allows 10 checks, giving audio more time to play before warning
+            esp_err_t wait_ret = tts_decoder_wait_for_idle(500);  // Was 200ms
             
             // ✅ FIX #3: If wait returns ESP_OK, break IMMEDIATELY
             // The wait_for_idle() function has already confirmed the task exited cleanly
@@ -790,6 +819,9 @@ static void wait_for_voice_pipeline_shutdown(void) {
 static esp_err_t transition_to_camera_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO CAMERA MODE ===");
     
+    // Log memory state before transition
+    memory_manager_log_stats("Before Camera Transition");
+    
     esp_err_t ret = ESP_OK;
     bool audio_was_initialized = audio_driver_is_initialized();
     
@@ -836,20 +868,25 @@ static esp_err_t transition_to_camera_mode(void) {
         ESP_LOGI(TAG, "Audio drivers already inactive; skipping deinit");
     }
     
-    // Step 4: Initialize camera
-    ESP_LOGI(TAG, "Initializing camera...");
-    ret = camera_controller_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init camera: %s", esp_err_to_name(ret));
-        xSemaphoreGive(g_i2s_config_mutex);
-        return ret;
-    }
+    // ✅ FIX #4: Allow memory allocator to stabilize and consolidate free blocks
+    // After audio deinit, DMA memory is highly fragmented (56% typical)
+    // Brief delay allows allocator background tasks to coalesce free blocks
+    ESP_LOGI(TAG, "Allowing memory stabilization (100ms)...");
+    vTaskDelay(pdMS_TO_TICKS(100));
     
-    // Step 5: Release I2S mutex
+    // ✅ FIX #5: Camera will be initialized ONLY when capturing (on-demand init)
+    // This keeps camera deinitialized in CAMERA_STANDBY to free ~46KB DMA memory
+    // Previously camera stayed initialized consuming DMA, causing audio feedback failures
+    ESP_LOGI(TAG, "Camera will be initialized on-demand during capture");
+    
+    // Step 4: Release I2S mutex
     xSemaphoreGive(g_i2s_config_mutex);
     ESP_LOGI(TAG, "I2S mutex released");
     
-    ESP_LOGI(TAG, "✅ Camera mode transition complete");
+    // Log memory state after transition
+    memory_manager_log_stats("After Camera Transition");
+    
+    ESP_LOGI(TAG, "✅ Camera mode transition complete (camera deinitialized to conserve DMA)");
 
     if (previous_state == SYSTEM_STATE_VOICE_ACTIVE) {
         esp_err_t stop_sound_ret = feedback_player_play(FEEDBACK_SOUND_REC_STOP);
@@ -865,21 +902,23 @@ static esp_err_t transition_to_camera_mode(void) {
 static esp_err_t capture_and_upload_image(void) {
     ESP_LOGI(TAG, "Capturing frame from camera");
 
-    // Check if audio drivers are active and deinitialize them temporarily for better camera performance
-    bool audio_was_initialized = audio_driver_is_initialized();
-    if (audio_was_initialized) {
-        ESP_LOGI(TAG, "Temporarily deinit audio drivers for camera capture");
-        audio_driver_deinit();
+    // ✅ FIX #5: Initialize camera ONLY when capturing to free DMA memory
+    // Camera consumes ~46KB DMA memory in standby mode, causing audio feedback init failures
+    // By init/deinit per capture, we free DMA for other operations
+    esp_err_t ret = camera_controller_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize camera for capture: %s", esp_err_to_name(ret));
+        return ret;
     }
+    
+    // Brief stabilization after camera init
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     camera_fb_t *fb = camera_controller_capture_frame();
     if (fb == NULL) {
         ESP_LOGE(TAG, "Frame capture failed");
-
-        // Reinitialize audio if it was active before capture
-        if (audio_was_initialized) {
-            audio_driver_init();
-        }
+        // Deinit camera even on failure to free DMA memory
+        camera_controller_deinit();
         return ESP_FAIL;
     }
 
@@ -890,18 +929,14 @@ static esp_err_t capture_and_upload_image(void) {
 
     ESP_LOGI(TAG, "Uploading image using session %s", session_id);
     char response[512];
-    esp_err_t ret = http_client_upload_image(session_id, fb->buf, fb->len,
+    ret = http_client_upload_image(session_id, fb->buf, fb->len,
                                              response, sizeof(response));
 
     esp_camera_fb_return(fb);
-
-    // Reinitialize audio if it was active before capture
-    if (audio_was_initialized) {
-        esp_err_t audio_ret = audio_driver_init();
-        if (audio_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to reinitialize audio after capture: %s", esp_err_to_name(audio_ret));
-        }
-    }
+    
+    // ✅ FIX #5: Deinitialize camera immediately after capture to free ~46KB DMA memory
+    camera_controller_deinit();
+    ESP_LOGI(TAG, "Camera deinitialized - DMA memory freed");
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Image uploaded successfully");
@@ -947,60 +982,21 @@ static esp_err_t handle_camera_capture(void) {
 
     bool capture_success = false;
     esp_err_t ret = ESP_OK;
-    bool camera_initialized_here = false;
-    bool audio_was_active_before_capture = false;
 
     if (current_state != SYSTEM_STATE_CAMERA_STANDBY) {
         ESP_LOGW(TAG, "Camera capture requested during %s", state_to_string(current_state));
     }
 
-    // Check if audio drivers are active and temporarily disable them during capture
-    // This can improve camera capture stability since both use DMA resources
-    audio_was_active_before_capture = audio_driver_is_initialized();
-
-    if (!camera_controller_is_initialized()) {
-        ESP_LOGI(TAG, "Camera not initialized; attempting setup before capture");
-        
-        // If audio was active, we might need to deinitialize it to free up GPIO/ISR resources
-        if (audio_was_active_before_capture) {
-            ESP_LOGI(TAG, "Audio drivers active, deinit for camera setup");
-            audio_driver_deinit();
-        }
-        
-        ret = camera_controller_init();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize camera: %s", esp_err_to_name(ret));
-            
-            // Reinitialize audio if it was active before capture attempt
-            if (audio_was_active_before_capture) {
-                esp_err_t audio_ret = audio_driver_init();
-                if (audio_ret != ESP_OK) {
-                    ESP_LOGW(TAG, "Failed to reinitialize audio after failed capture: %s", esp_err_to_name(audio_ret));
-                }
-            }
-            goto finalize_capture;
-        }
-        camera_initialized_here = true;
-    }
-
+    // ✅ FIX #7: Removed redundant camera initialization logic
+    // Camera is now initialized ON-DEMAND inside capture_and_upload_image() per Fix #5
+    // This prevents double initialization crashes and optimizes DMA memory usage
+    
     ret = capture_and_upload_image();
     capture_success = (ret == ESP_OK);
 
-finalize_capture:
-    if (camera_initialized_here) {
-        ESP_LOGI(TAG, "Deinitializing temporary camera session after capture");
-        camera_controller_deinit();
-    }
-
-    // Restore audio if it was active before capture
-    if (audio_was_active_before_capture && !camera_initialized_here && current_state == SYSTEM_STATE_CAMERA_STANDBY) {
-        // Only reinitialize audio if we didn't fully deinit the camera
-        // and we're staying in camera mode (not transitioning)
-        esp_err_t audio_ret = audio_driver_init();
-        if (audio_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to reinitialize audio after capture: %s", esp_err_to_name(audio_ret));
-        }
-    }
+    // ✅ FIX #8: Removed obsolete audio restoration logic
+    // Audio is no longer deinitialized during capture (old logic removed in Fix #7)
+    // capture_and_upload_image() now handles all resource management internally
 
     if (capture_success) {
         led_state_t next_led = (current_state == SYSTEM_STATE_VOICE_ACTIVE) ?
@@ -1025,6 +1021,9 @@ finalize_capture:
 
 static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO VOICE MODE ===");
+    
+    // Log memory state before transition
+    memory_manager_log_stats("Before Voice Transition");
     
     esp_err_t ret = ESP_OK;
     
@@ -1102,9 +1101,8 @@ static esp_err_t transition_to_voice_mode(void) {
                  esp_err_to_name(ret), (uint32_t)audio_init_time);
         ESP_LOGE(TAG, "  Free heap at failure: %u bytes", (unsigned int)esp_get_free_heap_size());
         
-        // Attempt recovery: reinitialize camera
-        ESP_LOGW(TAG, "⚠ Attempting recovery - reinitializing camera");
-        camera_controller_init();
+        // ✅ FIX #6: Camera should NOT be initialized during voice mode (on-demand init during capture only)
+        // Removed obsolete camera_controller_init() recovery attempt to prevent double initialization crash
         
         xSemaphoreGive(g_i2s_config_mutex);
         return ret;
@@ -1152,6 +1150,9 @@ static esp_err_t transition_to_voice_mode(void) {
         ESP_LOGW(TAG, "Voice start feedback failed: %s", esp_err_to_name(start_sound_ret));
     }
     led_controller_set_state(LED_STATE_SOLID);
+    
+    // Log memory state after transition
+    memory_manager_log_stats("After Voice Transition");
     
     ESP_LOGI(TAG, "✅ Voice mode transition complete");
     return ESP_OK;

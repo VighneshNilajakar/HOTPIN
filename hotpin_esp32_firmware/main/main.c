@@ -47,6 +47,7 @@
 #include "serial_commands.h"
 #include "event_dispatcher.h"
 #include "system_events.h"
+#include "memory_manager.h"
 
 // ===========================
 // Forward Declarations
@@ -125,6 +126,12 @@ void app_main(void) {
     // ===========================
     // Phase 2: Software Infrastructure
     // ===========================
+    
+    // Initialize memory manager with monitoring
+    ESP_LOGI(TAG, "Initializing memory manager...");
+    ESP_ERROR_CHECK(memory_manager_init(NULL));  // Use default thresholds
+    ESP_ERROR_CHECK(memory_manager_start_monitoring(15000));  // Monitor every 15 seconds
+    memory_manager_log_stats("System Boot");
     
     // Initialize NVS (required for WiFi)
     ESP_ERROR_CHECK(init_nvs());
@@ -454,6 +461,7 @@ static void websocket_connection_task(void *pvParameters) {
     const int MAX_RETRY_DELAY_MS = 30000;
     int retry_delay_ms = 5000;
     int attempt = 0;
+    bool shutdown_logged = false;  // ✅ FIX #9: Prevent log spam during shutdown
 
     ESP_LOGI(TAG, "WebSocket connection task started on Core %d", xPortGetCoreID());
 
@@ -461,7 +469,10 @@ static void websocket_connection_task(void *pvParameters) {
         // Check for system shutdown state
         system_state_t current_state = state_manager_get_state();
         if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-            ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+            if (!shutdown_logged) {
+                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                shutdown_logged = true;
+            }
             break;
         }
 
@@ -479,7 +490,10 @@ static void websocket_connection_task(void *pvParameters) {
             // Check for system shutdown state
             current_state = state_manager_get_state();
             if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                if (!shutdown_logged) {
+                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    shutdown_logged = true;
+                }
                 break;
             }
 
@@ -500,7 +514,10 @@ static void websocket_connection_task(void *pvParameters) {
                 // Check for system shutdown state
                 current_state = state_manager_get_state();
                 if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    if (!shutdown_logged) {
+                        ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                        shutdown_logged = true;
+                    }
                     break;
                 }
 
@@ -518,7 +535,10 @@ static void websocket_connection_task(void *pvParameters) {
             // Check for system shutdown state
             current_state = state_manager_get_state();
             if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                if (!shutdown_logged) {
+                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    shutdown_logged = true;
+                }
                 break;
             }
 
@@ -547,12 +567,19 @@ static void websocket_connection_task(void *pvParameters) {
                 // Check for system shutdown state
                 current_state = state_manager_get_state();
                 if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    if (!shutdown_logged) {
+                        ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                        shutdown_logged = true;
+                    }
                     break;
                 }
 
                 // Reset watchdog timer to prevent timeout
-                esp_task_wdt_reset();
+                // ✅ IMPROVED: Use safe version that suppresses benign errors
+                esp_err_t wdt_ret = esp_task_wdt_reset();
+                if (wdt_ret != ESP_OK && wdt_ret != ESP_ERR_NOT_FOUND && wdt_ret != ESP_ERR_INVALID_ARG) {
+                    ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(wdt_ret));
+                }
                 
                 vTaskDelay(pdMS_TO_TICKS(2000));
             }
@@ -560,7 +587,10 @@ static void websocket_connection_task(void *pvParameters) {
             // Check for system shutdown state
             current_state = state_manager_get_state();
             if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                if (!shutdown_logged) {
+                    ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                    shutdown_logged = true;
+                }
                 break;
             }
 
@@ -573,7 +603,10 @@ static void websocket_connection_task(void *pvParameters) {
             // Check for system shutdown state
         current_state = state_manager_get_state();
         if (current_state == SYSTEM_STATE_SHUTDOWN || current_state == SYSTEM_STATE_ERROR) {
-            ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+            if (!shutdown_logged) {
+                ESP_LOGI(TAG, "System shutdown detected, terminating WebSocket connection task");
+                shutdown_logged = true;
+            }
             break;
         }
     }

@@ -99,8 +99,8 @@ static esp_err_t write_pcm_chunk_to_driver(const uint8_t *data, size_t length, s
 static bool ensure_stereo_scratch_buffer(void);
 
 // Safe watchdog reset function to prevent errors when task is not registered
-// ✅ FIX #4 (REVISED): Only reset watchdog if we're in the correct task context and still registered
-// ✅ FIX #7: Suppress ESP_ERR_INVALID_ARG error which occurs during race condition at task shutdown
+// ✅ FIX #2: Only reset watchdog if we're in the correct task context and still registered
+// Suppresses ESP_ERR_INVALID_ARG error during task shutdown race condition
 static inline void safe_task_wdt_reset(void) {
     // CRITICAL: Check if current task matches the playback task handle
     // This prevents most cases of calling esp_task_wdt_reset() after unregistration
@@ -109,9 +109,10 @@ static inline void safe_task_wdt_reset(void) {
         current_task == g_playback_task_handle && 
         is_running) {
         esp_err_t ret = esp_task_wdt_reset();
-        // ✅ FIX #7: Silently ignore ESP_ERR_INVALID_ARG (task already unregistered during shutdown)
-        // This is expected during the brief race condition window when task is exiting
-        if (ret != ESP_OK && ret != ESP_ERR_INVALID_ARG) {
+        // ✅ FIX #2: Silently ignore ESP_ERR_NOT_FOUND (task not registered) 
+        // This occurs during brief race condition when unregistering from watchdog
+        // The error is harmless - task is shutting down cleanly
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_ARG && ret != ESP_ERR_NOT_FOUND) {
             // Only log unexpected errors at detailed level to avoid spam
             ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
         }
@@ -132,12 +133,29 @@ esp_err_t tts_decoder_init(void) {
     
     // Create audio stream buffer in PSRAM
     if (g_audio_stream_buffer == NULL) {
+        // Check if sufficient PSRAM is available before allocating
+        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t required = TTS_STREAM_BUFFER_SIZE + 32768; // Buffer + 32KB safety margin
+        
+        if (psram_free < required) {
+            ESP_LOGE(TAG, "Insufficient PSRAM for TTS buffer: need %u bytes, have %u bytes",
+                     (unsigned int)required, (unsigned int)psram_free);
+            return ESP_ERR_NO_MEM;
+        }
+        
         ESP_LOGI(TAG, "Allocating %d byte PSRAM buffer for TTS stream", TTS_STREAM_BUFFER_SIZE);
+        ESP_LOGI(TAG, "  PSRAM available: %u bytes (%u KB)", 
+                 (unsigned int)psram_free, (unsigned int)(psram_free / 1024));
+        
         g_stream_buffer_storage = (uint8_t *)heap_caps_malloc(TTS_STREAM_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
         if (g_stream_buffer_storage == NULL) {
             ESP_LOGE(TAG, "Failed to allocate PSRAM for stream buffer storage");
+            ESP_LOGE(TAG, "  Requested: %d bytes", TTS_STREAM_BUFFER_SIZE);
+            ESP_LOGE(TAG, "  Available: %u bytes", (unsigned int)psram_free);
             return ESP_ERR_NO_MEM;
         }
+        
+        ESP_LOGI(TAG, "  ✓ TTS stream buffer allocated at %p", g_stream_buffer_storage);
 
         g_audio_stream_buffer = xStreamBufferCreateStatic(
             TTS_STREAM_BUFFER_SIZE,
@@ -364,6 +382,15 @@ bool tts_decoder_is_playing(void) {
     return is_playing;
 }
 
+bool tts_decoder_is_receiving_audio(void) {
+    // Return true if:
+    // 1. Decoder is running (task active)
+    // 2. We've received audio data in this session
+    // 3. Playback hasn't completed yet
+    // 4. Session is still active
+    return is_running && audio_data_received && !playback_completed && is_session_active;
+}
+
 // ===========================
 // Private Functions
 // ===========================
@@ -376,12 +403,27 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
     // This prevents buffer overflow when server sends audio after mode transition
     if (!is_running || g_playback_task_handle == NULL) {
         static uint32_t rejected_count = 0;
+        static uint32_t last_log_count = 0;
         rejected_count++;
-        if (rejected_count == 1 || (rejected_count % 20) == 0) {
-            ESP_LOGW(TAG, "Rejecting audio chunk #%u (%zu bytes) - TTS decoder not running (rejected: %u)", 
-                     (unsigned int)chunk_count, len, (unsigned int)rejected_count);
+        
+        // ✅ FIX: Further reduce log spam - only log first, every 50th, and reset on new session
+        // This prevents hundreds of warnings during mode transitions
+        if (rejected_count == 1 || 
+            (rejected_count >= 50 && (rejected_count % 50) == 0) ||
+            (rejected_count - last_log_count) >= 100) {
+            ESP_LOGW(TAG, "Rejecting audio chunks - TTS decoder not running (chunks rejected: %u, last: %zu bytes)", 
+                     (unsigned int)rejected_count, len);
+            last_log_count = rejected_count;
         }
         return;
+    }
+    
+    // Reset rejection counter when decoder is running
+    static uint32_t last_running_check = 0;
+    if (chunk_count > last_running_check + 10) {
+        static uint32_t rejected_count = 0;  // Reset counter
+        rejected_count = 0;
+        last_running_check = chunk_count;
     }
     
     ESP_LOGI(TAG, "Received audio chunk #%u: %zu bytes", (unsigned int)chunk_count, len);
@@ -698,9 +740,9 @@ static void tts_playback_task(void *pvParameters) {
                 break;
             }
             
-            // Check if we've been idle for too long (more than 5 seconds with no data)
-            if ((current_time - last_activity_timestamp) > 5000) {
-                ESP_LOGD(TAG, "Playback task idle for 5+ seconds, checking exit conditions...");
+            // Check if we've been idle for too long (more than 20 seconds with no data)
+            if ((current_time - last_activity_timestamp) > 20000) {
+                ESP_LOGD(TAG, "Playback task idle for 20+ seconds, checking exit conditions...");
                 
                 // ✅ FIX #6: If EOS was requested, check if buffer is empty OR has remnant bytes (< 100)
                 if (eos_requested) {
@@ -729,9 +771,10 @@ static void tts_playback_task(void *pvParameters) {
                     break;
                 }
                 
-                // ✅ FIX: Exit if no audio data received after 5 seconds (handles WebSocket disconnect before audio arrives)
+                // ✅ FIX #10: Exit if no audio data received after 20 seconds (increased from 5 to allow for LLM processing time)
+                // STT→LLM→TTS pipeline can take 6-10 seconds, so 5 seconds was too short
                 if (!audio_data_received) {
-                    ESP_LOGI(TAG, "No audio data received after 5+ seconds. Exiting playback task (likely connection issue).");
+                    ESP_LOGI(TAG, "No audio data received after 20+ seconds. Exiting playback task (likely connection issue).");
                     playback_completed = true;
                     break;
                 }
@@ -1071,7 +1114,9 @@ esp_err_t tts_decoder_wait_for_idle(uint32_t timeout_ms) {
 
     TickType_t start_tick = xTaskGetTickCount();
     TickType_t timeout_ticks = (timeout_ms == 0) ? 0 : pdMS_TO_TICKS(timeout_ms);
-    const TickType_t sleep_ticks = pdMS_TO_TICKS(20);
+    // ✅ FIX #14: Increased check interval from 20ms to 50ms to reduce false timeout warnings
+    // Audio playback takes time - checking every 20ms was too aggressive
+    const TickType_t sleep_ticks = pdMS_TO_TICKS(50);  // Was 20ms
     
     // More comprehensive check: track if we've actually started receiving audio
     bool had_audio_data = audio_data_received || bytes_received > 0;

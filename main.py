@@ -473,17 +473,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             "error_type": type(processing_error).__name__
                         }))
                     
-                    except Exception as processing_error:
-                        import traceback
-                        error_details = traceback.format_exc()
-                        print(f"✗ [{session_id}] Processing error: {processing_error}")
-                        print(f"   Stack trace:\n{error_details}")
-                        await websocket.send_text(json.dumps({
-                            "status": "error",
-                            "message": "An error occurred while processing your request.",
-                            "error_type": type(processing_error).__name__
-                        }))
-                    
                     finally:
                         # Reset audio buffer for next utterance
                         SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
