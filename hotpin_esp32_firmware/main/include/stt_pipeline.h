@@ -69,4 +69,15 @@ void stt_pipeline_cancel_capture(void);
  */
 const stt_pipeline_handle_t *stt_pipeline_get_handle(void);
 
+/**
+ * @brief Update flow control state with server acknowledgment
+ * 
+ * Called when server sends acknowledgment for received audio chunks.
+ * This allows the streaming task to implement backpressure and prevent
+ * send buffer overflow.
+ * 
+ * @param ack_chunk_number Chunk number acknowledged by server
+ */
+void stt_pipeline_update_flow_control(uint32_t ack_chunk_number);
+
 #endif // STT_PIPELINE_H

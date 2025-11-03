@@ -910,6 +910,18 @@ static void handle_text_message(const char *data, size_t len) {
     if (status_str != NULL) {
         ESP_LOGI(TAG, "Server status: %s", status_str);
         
+        // ✅ PRIORITY 2: Handle server acknowledgment messages for flow control
+        // Server sends {"status": "receiving", "chunks_received": N, "bytes_received": M} every 2 chunks
+        // This allows us to implement backpressure and prevent send buffer overflow
+        if (strcmp(status_str, "receiving") == 0) {
+            cJSON *chunks_received = cJSON_GetObjectItem(root, "chunks_received");
+            if (chunks_received != NULL && cJSON_IsNumber(chunks_received)) {
+                uint32_t ack_chunk = (uint32_t)chunks_received->valueint;
+                stt_pipeline_update_flow_control(ack_chunk);
+                ESP_LOGI(TAG, "Server ACK: %u chunks processed", (unsigned int)ack_chunk);
+            }
+        }
+        
         // Check if this is an error message indicating empty transcription
         if (strcmp(status_str, "error") == 0) {
             cJSON *message = cJSON_GetObjectItem(root, "message");

@@ -329,6 +329,8 @@ async def websocket_endpoint(websocket: WebSocket):
     - TTS synthesis: sync in thread pool (via asyncio.to_thread)
     """
     session_id = None
+    last_activity_time = asyncio.get_event_loop().time()
+    audio_streaming_timeout = 30.0  # 30 seconds max for audio streaming phase
     
     try:
         # Accept WebSocket connection
@@ -336,7 +338,10 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"New WebSocket connection established")
         
         # Step 1: Handshake - receive session ID
-        handshake_message = await websocket.receive_text()
+        handshake_message = await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=10.0
+        )
         handshake_data = json.loads(handshake_message)
         session_id = handshake_data.get("session_id")
         
@@ -358,8 +363,24 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Main communication loop
         while True:
-            # Receive message (can be binary audio or text signal)
-            message = await websocket.receive()
+            # Receive message with timeout to detect stale connections
+            try:
+                message = await asyncio.wait_for(
+                    websocket.receive(),
+                    timeout=audio_streaming_timeout
+                )
+                last_activity_time = asyncio.get_event_loop().time()
+            except asyncio.TimeoutError:
+                # Check if we have pending audio data
+                if SESSION_AUDIO_BUFFERS.get(session_id) and SESSION_AUDIO_BUFFERS[session_id].tell() > 0:
+                    print(f"⏱️ [{session_id}] Streaming timeout with {SESSION_AUDIO_BUFFERS[session_id].tell()} bytes buffered - auto-processing")
+                    # Auto-trigger EOS processing
+                    signal_data = {"signal": "EOS"}
+                    message = {"text": json.dumps(signal_data)}
+                else:
+                    print(f"⏱️ [{session_id}] Connection idle timeout - closing")
+                    await websocket.close(code=1000, reason="Idle timeout")
+                    break
 
             message_type = message.get("type")
             if message_type == "websocket.disconnect":
@@ -384,22 +405,25 @@ async def websocket_endpoint(websocket: WebSocket):
                             f"{len(audio_chunk)} bytes (total streamed: {stats['bytes']})"
                         )
                     
-                    # CRITICAL FIX: Send acknowledgment every 5 chunks to prevent TCP buffer overflow
-                    # Reduced from 10 to 5 to provide faster flow control and keep WebSocket connection alive
-                    # This helps prevent send buffer saturation on ESP32 during sustained audio streaming
-                    if (stats["chunks"] % 5) == 0:
+                    # CRITICAL FIX: Send acknowledgment every 2 chunks for aggressive flow control
+                    # This provides backpressure feedback to ESP32 to prevent send buffer saturation
+                    # More frequent ACKs = better flow control at cost of slightly more overhead
+                    if (stats["chunks"] % 2) == 0:
                         try:
                             await websocket.send_text(json.dumps({
                                 "status": "receiving",
                                 "chunks_received": stats["chunks"],
                                 "bytes_received": stats["bytes"]
                             }))
-                            print(f"✓ [{session_id}] Sent acknowledgment at chunk {stats['chunks']}")
+                            # Reduced logging frequency to avoid spam
+                            if (stats["chunks"] % 10) == 0:
+                                print(f"✓ [{session_id}] Sent acknowledgment at chunk {stats['chunks']}")
                         except Exception as ack_error:
                             import traceback
                             error_details = traceback.format_exc()
                             print(f"⚠ [{session_id}] Failed to send acknowledgment: {ack_error}")
                             print(f"   Stack trace:\n{error_details}")
+                            # Connection likely broken, will be caught by outer handler
                 
                 # Optional: Send progress indicator
                 buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()
