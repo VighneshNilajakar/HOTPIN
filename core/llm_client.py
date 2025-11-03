@@ -24,14 +24,16 @@ groq_client: Optional[httpx.AsyncClient] = None
 # Groq API configuration
 GROQ_API_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Hotpin system prompt - optimized for TTS and wearable interaction
-SYSTEM_PROMPT = """SYSTEM: You are "Hotpin" — a compact, helpful, and privacy-first voice assistant. Your goal is to provide short, one-liner answers. Rules:
+# Hotpin system prompt - optimized for TTS, wearable interaction, and vision
+SYSTEM_PROMPT = """SYSTEM: You are "Hotpin" — a compact, helpful, and privacy-first voice assistant with vision capabilities. Your goal is to provide short, one-liner answers. Rules:
 
 1.  **MUST BE A SINGLE SENTENCE:** Your entire response must be a single, short sentence.
 2.  **NO FORMATTING:** Do not use any formatting, including newlines, lists, or bold text.
-3.  **ONE-LINER:** Your response must be a single line of text."""
+3.  **ONE-LINER:** Your response must be a single line of text.
+4.  **VISION INTEGRATION:** When an image is provided, analyze it and incorporate visual insights into your concise response.
+5.  **CONTEXT AWARENESS:** Reference what you see in the image naturally within your single-sentence answer."""
 
 
 def init_client() -> None:
@@ -103,13 +105,14 @@ def manage_context(session_id: str, role: str, content: str, max_history_turns: 
         SESSION_CONTEXTS[session_id]["history"] = SESSION_CONTEXTS[session_id]["history"][-max_messages:]
 
 
-async def get_llm_response(session_id: str, transcript: str) -> str:
+async def get_llm_response(session_id: str, transcript: str, image_base64: Optional[str] = None) -> str:
     """
-    Get LLM response from Groq API with conversation context.
+    Get LLM response from Groq API with conversation context and optional image.
     
     Args:
         session_id: Unique session identifier
         transcript: User's transcribed speech input
+        image_base64: Optional base64-encoded JPEG image for multimodal context
     
     Returns:
         str: LLM-generated response text
@@ -122,16 +125,47 @@ async def get_llm_response(session_id: str, transcript: str) -> str:
     if not groq_client:
         raise RuntimeError("Groq client not initialized. Call init_client() first.")
     
-    # Add user message to context
+    # Construct user message with optional image
+    if image_base64:
+        # Multimodal message format with text and image
+        user_message_content = [
+            {
+                "type": "text",
+                "text": transcript
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_base64}"
+                }
+            }
+        ]
+        print(f"🖼️ [{session_id}] Including image in LLM context (base64 length: {len(image_base64)})")
+    else:
+        # Text-only message
+        user_message_content = transcript
+    
+    # Add user message to context (store as text for history tracking)
     manage_context(session_id, "user", transcript)
     
     # Retrieve conversation history
     history = SESSION_CONTEXTS[session_id]["history"]
     
-    # Construct API payload with system prompt + conversation history
+    # Construct messages with system prompt
+    # Replace the last user message with multimodal content if image provided
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT}
-    ] + history
+    ]
+    
+    # Add history except last message (which we'll replace with multimodal version if needed)
+    if len(history) > 1:
+        messages.extend(history[:-1])
+    
+    # Add current user message (multimodal or text-only)
+    messages.append({
+        "role": "user",
+        "content": user_message_content
+    })
     
     payload = {
         "model": GROQ_MODEL,

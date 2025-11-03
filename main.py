@@ -19,8 +19,10 @@ import json
 import asyncio
 import socket
 import subprocess
+import base64
 from typing import Dict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -64,6 +66,11 @@ SESSION_AUDIO_BUFFERS: Dict[str, io.BytesIO] = {}
 
 # Lightweight telemetry for debugging: tracks per-session audio chunks
 SESSION_AUDIO_STATS: Dict[str, Dict[str, int]] = {}
+
+# In-memory session image storage for multimodal context
+# Maps session_id -> base64-encoded JPEG image string
+# Cleared after each conversation turn to prevent stale context
+SESSION_IMAGES: Dict[str, str] = {}
 
 # Server configuration
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
@@ -260,9 +267,14 @@ async def upload_image(
         
         print(f"📷 [{session}] Image received: {file.filename}, {image_size} bytes ({image_size/1024:.2f} KB)")
         
+        # Convert to base64 for multimodal LLM context
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        # Store in session context for next audio interaction
+        SESSION_IMAGES[session] = base64_image
+        print(f"🖼️ [{session}] Image stored in session context (base64 size: {len(base64_image)} chars)")
+        
         # Optional: Save image to disk
-        import os
-        from datetime import datetime
         
         # Create images directory if it doesn't exist
         os.makedirs("captured_images", exist_ok=True)
@@ -276,16 +288,14 @@ async def upload_image(
         
         print(f"💾 [{session}] Image saved: {save_path}")
         
-        # TODO: Add image processing here (e.g., object detection, OCR, etc.)
-        # For now, just acknowledge receipt
-        
         return JSONResponse({
             "status": "success",
-            "message": "Image received successfully",
+            "message": "Image received and stored for next voice interaction",
             "session": session,
             "filename": file.filename,
             "size_bytes": image_size,
-            "saved_path": save_path
+            "saved_path": save_path,
+            "context_ready": True
         })
     
     except Exception as e:
@@ -442,17 +452,28 @@ async def websocket_endpoint(websocket: WebSocket):
                         
                         print(f"📝 [{session_id}] Transcript: \"{transcript}\"")
                         
+                        # Check for stored image context
+                        image_context = SESSION_IMAGES.get(session_id)
+                        if image_context:
+                            print(f"🖼️ [{session_id}] Using stored image context for LLM request")
+                        
                         # Send transcript to client (optional feedback)
                         await websocket.send_text(json.dumps({
                             "status": "processing",
                             "stage": "llm",
-                            "transcript": transcript
+                            "transcript": transcript,
+                            "has_image": image_context is not None
                         }))
                         
-                        # Step 3: LLM - Get response (async, non-blocking)
-                        llm_response = await get_llm_response(session_id, transcript)
+                        # Step 3: LLM - Get response (async, non-blocking) with optional image
+                        llm_response = await get_llm_response(session_id, transcript, image_base64=image_context)
                         
                         print(f"🤖 [{session_id}] LLM response: \"{llm_response}\"")
+                        
+                        # Clear image context after use to prevent stale context
+                        if image_context:
+                            del SESSION_IMAGES[session_id]
+                            print(f"🗑️ [{session_id}] Cleared image context after use")
                         
                         # Validate LLM response before TTS synthesis
                         if not llm_response or llm_response.strip() == "":
@@ -515,6 +536,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Reset conversation context
                     clear_session_context(session_id)
                     SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+                    if session_id in SESSION_IMAGES:
+                        del SESSION_IMAGES[session_id]
+                        print(f"🗑️ [{session_id}] Cleared stored image context on reset")
                     await websocket.send_text(json.dumps({
                         "status": "reset_complete"
                     }))
@@ -537,6 +561,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 del SESSION_AUDIO_BUFFERS[session_id]
             if session_id in SESSION_AUDIO_STATS:
                 del SESSION_AUDIO_STATS[session_id]
+            if session_id in SESSION_IMAGES:
+                del SESSION_IMAGES[session_id]
+                print(f"🗑️ [{session_id}] Cleared stored image context")
             clear_session_context(session_id)
             print(f"🧹 [{session_id}] Session cleaned up")
 
