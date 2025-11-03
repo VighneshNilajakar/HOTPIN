@@ -1,5 +1,5 @@
 PS F:\Documents\HOTPIN\HOTPIN> python main.py
-INFO:     Started server process [17848]
+INFO:     Started server process [9024]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -13,7 +13,7 @@ Network Information:
    Server URL: http://10.143.111.58:8000
    WebSocket URL: ws://10.143.111.58:8000/ws
 
-Groq AsyncClient initialized with model: llama-3.1-8b-instant
+Groq AsyncClient initialized with model: meta-llama/llama-4-scout-17b-16e-instruct
 Loading Vosk model from: ./model
 LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=10 max-active=3000 lattice-beam=2
 LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:6:7:8:9:10      
@@ -35,7 +35,17 @@ Server ready at ws://0.0.0.0:8000/ws
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.143.111.214:58517 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:56683 - "WebSocket /ws" [accepted]
+New WebSocket connection established
+INFO:     connection open
+Session initialized: esp32-cam-hotpin
+🔊 [esp32-cam-hotpin] Audio chunk 1: 16 bytes (total streamed: 16)
+🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
+🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
+INFO:     connection closed
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006, reason=)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     10.143.111.214:56684 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
@@ -43,65 +53,13 @@ Session initialized: esp32-cam-hotpin
 🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
 🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
 🔊 [esp32-cam-hotpin] Audio chunk 4: 4096 bytes (total streamed: 12304)
-🔊 [esp32-cam-hotpin] Audio chunk 5: 4096 bytes (total streamed: 16400)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 5
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 10
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 15
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 20
-🔊 [esp32-cam-hotpin] Audio chunk 25: 4096 bytes (total streamed: 98320)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 25
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 30
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 126992 bytes of audio...
-Transcription [esp32-cam-hotpin]: "what is your needs"
-📝 [esp32-cam-hotpin] Transcript: "what is your needs"
-🤖 [esp32-cam-hotpin] LLM response: "I need minimal user data and a stable internet connection to function effectively."
-TTS synthesis completed: 171880 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_5vmd1jsz.wav
-🔊 [esp32-cam-hotpin] Streaming 171880 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-🔊 [esp32-cam-hotpin] Audio chunk 1: 16 bytes (total streamed: 16)
-🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
-🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
-🔊 [esp32-cam-hotpin] Audio chunk 4: 4096 bytes (total streamed: 12304)
-🔊 [esp32-cam-hotpin] Audio chunk 5: 4096 bytes (total streamed: 16400)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 5
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 10
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 15
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 20
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 80912 bytes of audio...
-Transcription [esp32-cam-hotpin]: "i"
-📝 [esp32-cam-hotpin] Transcript: "i"
-🤖 [esp32-cam-hotpin] LLM response: "It seems you started to ask a question but didn't finish."
-TTS synthesis completed: 128770 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_8nuynsbq.wav
-🔊 [esp32-cam-hotpin] Streaming 128770 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-📷 [hotpin-998C64-52] Image received: image.jpg, 10351 bytes (10.11 KB)
-💾 [hotpin-998C64-52] Image saved: captured_images/hotpin-998C64-52_20251103_194356.jpg
-INFO:     10.143.111.214:58518 - "POST /image HTTP/1.1" 200 OK
-🔊 [esp32-cam-hotpin] Audio chunk 1: 16 bytes (total streamed: 16)
-🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
-🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
-🔊 [esp32-cam-hotpin] Audio chunk 4: 4096 bytes (total streamed: 12304)
-🔊 [esp32-cam-hotpin] Audio chunk 5: 4096 bytes (total streamed: 16400)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 5
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 10
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 15
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 73744 bytes of audio...
-Transcription [esp32-cam-hotpin]: "hello"
-📝 [esp32-cam-hotpin] Transcript: "hello"
-🤖 [esp32-cam-hotpin] LLM response: "Hello, I'm Hotpin, your compact and helpful voice assistant."
-TTS synthesis completed: 150762 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_mg2qpctj.wav
-🔊 [esp32-cam-hotpin] Streaming 150762 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005, reason=)
-✓ Cleared context for session: esp32-cam-hotpin
+INFO:     connection closed
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006, reason=)
 🧹 [esp32-cam-hotpin] Session cleaned up
-INF
+INFO:     10.143.111.214:56685 - "WebSocket /ws" [accepted]
+New WebSocket connection established
+INFO:     connection open
+Session initialized: esp32-cam-hotpin
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005, reason=)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed
