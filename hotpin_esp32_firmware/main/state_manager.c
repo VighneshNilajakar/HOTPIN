@@ -42,6 +42,7 @@ static bool s_transition_in_progress = false;
 static bool s_capture_in_progress = false;
 static bool s_tts_playback_active = false;
 static bool s_transition_scheduled = false;
+static bool s_stt_stopped_awaiting_transcription = false;  // ✅ FIX: Track EOS → transcription gap
 
 // Safe watchdog reset function to prevent errors when task is not registered
 // ✅ IMPROVED: Suppress common benign errors (ESP_ERR_NOT_FOUND, ESP_ERR_INVALID_ARG)
@@ -291,6 +292,16 @@ static bool guardrails_should_block_button(button_event_type_t type) {
     // This prevents audio interruption when user gets impatient and presses button
     // before LLM response arrives (typical 6-10 second delay)
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+        // ✅ CRITICAL FIX: Block transitions during EOS → transcription gap
+        // This closes the vulnerability window where STT has stopped (EOS sent)
+        // but server hasn't started transcription yet (~400ms gap)
+        // Allowing button press here causes I2S deinit before TTS arrives
+        if (s_stt_stopped_awaiting_transcription) {
+            ESP_LOGW(TAG, "⏳ Awaiting server transcription (EOS sent) - please wait for response");
+            guardrails_signal_block("Server receiving audio - please wait");
+            return true;
+        }
+        
         // Check if TTS is receiving audio - if so, block ALL mode transitions
         if (tts_decoder_is_receiving_audio()) {
             ESP_LOGW(TAG, "⏳ TTS audio streaming in progress - please wait for response to finish");
@@ -300,6 +311,17 @@ static bool guardrails_should_block_button(button_event_type_t type) {
             if (beep_ret != ESP_OK) {
                 ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
             }
+            return true;
+        }
+        
+        // ✅ CRITICAL FIX: Block transitions during LLM/TTS pipeline stages
+        // The server is processing the audio and TTS audio will arrive soon
+        // Allowing transition here causes I2S to be deinitialized before audio arrives
+        if (s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_LLM || 
+            s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS ||
+            s_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION) {
+            ESP_LOGW(TAG, "⏳ Server processing your request (stage: %d) - please wait for response", s_pipeline_stage);
+            guardrails_signal_block("Server is processing - please wait");
             return true;
         }
         
@@ -583,6 +605,14 @@ static void handle_pipeline_stage_event(websocket_pipeline_stage_t stage)
 
     switch (stage) {
         case WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION:
+            // ✅ FIX: Clear waiting flag when transcription starts
+            // The server has received the EOS and started processing
+            if (s_stt_stopped_awaiting_transcription) {
+                s_stt_stopped_awaiting_transcription = false;
+                ESP_LOGI(TAG, "✅ Server transcription started (vulnerability window closed)");
+            }
+            led_controller_set_state(LED_STATE_PULSING);
+            break;
         case WEBSOCKET_PIPELINE_STAGE_LLM:
             led_controller_set_state(LED_STATE_PULSING);
             break;
@@ -620,6 +650,13 @@ static void handle_stt_started(void)
 static void handle_stt_stopped(void)
 {
     ESP_LOGI(TAG, "STT pipeline reported stop");
+    
+    // ✅ FIX: Set flag when STT stops (EOS sent) - we're now waiting for server transcription
+    // This closes the vulnerability window where pipeline stage is still "complete" or "idle"
+    // but server is about to start transcription → LLM → TTS
+    s_stt_stopped_awaiting_transcription = true;
+    ESP_LOGI(TAG, "⏳ Awaiting server transcription response (blocking mode transitions)");
+    
     if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
         led_controller_set_state(LED_STATE_SOLID);
     }
@@ -839,6 +876,7 @@ static esp_err_t transition_to_camera_mode(void) {
         tts_decoder_stop();
         s_tts_playback_active = false;
         s_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
+        s_stt_stopped_awaiting_transcription = false;  // ✅ FIX: Reset flag when exiting voice mode
 
         // Small delay for tasks to finish
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -1021,6 +1059,9 @@ static esp_err_t handle_camera_capture(void) {
 
 static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO VOICE MODE ===");
+    
+    // ✅ FIX: Initialize flag at start of voice session
+    s_stt_stopped_awaiting_transcription = false;
     
     // Log memory state before transition
     memory_manager_log_stats("Before Voice Transition");

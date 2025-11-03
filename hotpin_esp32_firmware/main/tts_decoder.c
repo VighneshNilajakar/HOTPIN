@@ -290,6 +290,7 @@ esp_err_t tts_decoder_start(void) {
 
     is_running = true;
     is_playing = true;
+    is_session_active = true;  // ✅ FIX: Mark session active when decoder starts expecting audio
 
     system_event_t evt = {
         .type = SYSTEM_EVENT_TTS_PLAYBACK_STARTED,

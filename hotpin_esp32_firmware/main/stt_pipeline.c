@@ -739,23 +739,10 @@ static void audio_streaming_task(void *pvParameters) {
                 xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
             }
             
-            // ✅ FIX #6: Test WebSocket transport health with small data send
-            // This ensures the transport layer is ready for heavy audio streaming
-            if (!aborted_due_to_error) {
-                ESP_LOGI(TAG, "Testing WebSocket transport health...");
-                uint8_t test_data[16] = {0};  // Small test packet
-                esp_err_t test_ret = websocket_client_send_audio(test_data, sizeof(test_data), 1000);
-                if (test_ret != ESP_OK) {
-                    ESP_LOGE(TAG, "WebSocket transport health check failed: %s - aborting", esp_err_to_name(test_ret));
-                    aborted_due_to_error = true;
-                    stt_pipeline_mark_stopped();
-                    xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);
-                } else {
-                    ESP_LOGI(TAG, "✅ WebSocket transport verified healthy");
-                    // Small delay to ensure test packet is processed
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
-            }
+            // REMOVED: Test packet was interfering with flow control counting
+            // The 16-byte test packet was counted as chunk 1 by server, but ESP32
+            // starts counting from 0, causing mismatch (sent: 3, acked: 4)
+            // Connection health is verified by successful handshake already
         }
         
         if (!aborted_due_to_error) {
@@ -826,21 +813,38 @@ static void audio_streaming_task(void *pvParameters) {
                         // ✅ PRIORITY 2: Backpressure handling - wait if 2+ chunks sent without ACK
                         // Server sends ACK every 2 chunks, so we should never have >2 unacknowledged
                         // This prevents overwhelming the WebSocket send buffer
-                        if ((g_flow_control.chunks_sent - g_flow_control.last_ack_chunk) >= 2) {
+                        uint32_t unacknowledged = (g_flow_control.chunks_sent > g_flow_control.last_ack_chunk) 
+                            ? (g_flow_control.chunks_sent - g_flow_control.last_ack_chunk) 
+                            : 0;
+                        
+                        if (unacknowledged >= 2) {
                             g_flow_control.waiting_for_ack = true;
                             TickType_t wait_start = xTaskGetTickCount();
-                            const TickType_t ack_timeout = pdMS_TO_TICKS(500);  // 500ms timeout for ACK
+                            const TickType_t ack_timeout = pdMS_TO_TICKS(1000);  // 1000ms timeout for ACK
                             
-                            ESP_LOGW(TAG, "Waiting for server ACK (sent: %u, acked: %u)",
+                            ESP_LOGW(TAG, "Waiting for server ACK (sent: %u, acked: %u, unack: %u)",
                                      (unsigned int)g_flow_control.chunks_sent,
-                                     (unsigned int)g_flow_control.last_ack_chunk);
+                                     (unsigned int)g_flow_control.last_ack_chunk,
+                                     (unsigned int)unacknowledged);
                             
-                            while ((g_flow_control.chunks_sent - g_flow_control.last_ack_chunk) >= 2) {
+                            while (true) {
+                                // Recalculate unacknowledged count
+                                unacknowledged = (g_flow_control.chunks_sent > g_flow_control.last_ack_chunk) 
+                                    ? (g_flow_control.chunks_sent - g_flow_control.last_ack_chunk) 
+                                    : 0;
+                                
+                                if (unacknowledged < 2) {
+                                    ESP_LOGI(TAG, "ACK received, resuming (unack now: %u)", (unsigned int)unacknowledged);
+                                    break;
+                                }
+                                
                                 vTaskDelay(pdMS_TO_TICKS(10));  // Check every 10ms
                                 
                                 // Check for timeout
                                 if ((xTaskGetTickCount() - wait_start) >= ack_timeout) {
-                                    ESP_LOGE(TAG, "ACK timeout - connection may be stalled");
+                                    ESP_LOGE(TAG, "ACK timeout - connection may be stalled (sent=%u, acked=%u)",
+                                             (unsigned int)g_flow_control.chunks_sent,
+                                             (unsigned int)g_flow_control.last_ack_chunk);
                                     aborted_due_to_error = true;
                                     stt_pipeline_mark_stopped();
                                     xEventGroupSetBits(s_pipeline_ctx.stream_events, STT_STREAM_EVENT_STOP);

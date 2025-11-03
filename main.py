@@ -410,20 +410,27 @@ async def websocket_endpoint(websocket: WebSocket):
                     # More frequent ACKs = better flow control at cost of slightly more overhead
                     if (stats["chunks"] % 2) == 0:
                         try:
-                            await websocket.send_text(json.dumps({
-                                "status": "receiving",
-                                "chunks_received": stats["chunks"],
-                                "bytes_received": stats["bytes"]
-                            }))
-                            # Reduced logging frequency to avoid spam
-                            if (stats["chunks"] % 10) == 0:
-                                print(f"✓ [{session_id}] Sent acknowledgment at chunk {stats['chunks']}")
+                            # Check if WebSocket is still connected before sending ACK
+                            if websocket.client_state.value == 1:  # 1 = CONNECTED state
+                                await websocket.send_text(json.dumps({
+                                    "status": "receiving",
+                                    "chunks_received": stats["chunks"],
+                                    "bytes_received": stats["bytes"]
+                                }))
+                                # Add small delay to prevent overwhelming the client with rapid ACKs
+                                await asyncio.sleep(0.01)  # 10ms breathing room
+                                # Reduced logging frequency to avoid spam
+                                if (stats["chunks"] % 10) == 0:
+                                    print(f"✓ [{session_id}] Sent acknowledgment at chunk {stats['chunks']}")
+                            else:
+                                print(f"⚠ [{session_id}] WebSocket disconnected, skipping ACK for chunk {stats['chunks']}")
+                                # Connection broken, abort audio reception
+                                break
                         except Exception as ack_error:
-                            import traceback
-                            error_details = traceback.format_exc()
                             print(f"⚠ [{session_id}] Failed to send acknowledgment: {ack_error}")
-                            print(f"   Stack trace:\n{error_details}")
-                            # Connection likely broken, will be caught by outer handler
+                            # Connection likely broken, abort gracefully
+                            print(f"   Connection state: {websocket.client_state}")
+                            break
                 
                 # Optional: Send progress indicator
                 buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()
@@ -451,11 +458,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f"🔄 [{session_id}] Processing {len(pcm_data)} bytes of audio...")
                     
                     try:
-                        # Send processing indicator
-                        await websocket.send_text(json.dumps({
-                            "status": "processing",
-                            "stage": "transcription"
-                        }))
+                        # Send processing indicator (check connection first)
+                        if websocket.client_state.value == 1:  # 1 = CONNECTED
+                            await websocket.send_text(json.dumps({
+                                "status": "processing",
+                                "stage": "transcription"
+                            }))
+                            await asyncio.sleep(0.01)  # Small delay between sends
+                        else:
+                            print(f"⚠ [{session_id}] WebSocket disconnected before processing - aborting")
+                            continue
                         
                         # Step 2: STT - Transcribe audio (blocking, run in thread pool)
                         transcript = await asyncio.to_thread(
@@ -466,10 +478,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         
                         if not transcript or transcript.strip() == "":
                             print(f"⚠ [{session_id}] Empty transcription")
-                            await websocket.send_text(json.dumps({
-                                "status": "error",
-                                "message": "Could not understand audio. Please try again."
-                            }))
+                            if websocket.client_state.value == 1:  # Check connection before sending
+                                await websocket.send_text(json.dumps({
+                                    "status": "error",
+                                    "message": "Could not understand audio. Please try again."
+                                }))
+                                await asyncio.sleep(0.01)
                             # Reset buffer
                             SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
                             continue
@@ -482,12 +496,14 @@ async def websocket_endpoint(websocket: WebSocket):
                             print(f"🖼️ [{session_id}] Using stored image context for LLM request")
                         
                         # Send transcript to client (optional feedback)
-                        await websocket.send_text(json.dumps({
-                            "status": "processing",
-                            "stage": "llm",
-                            "transcript": transcript,
-                            "has_image": image_context is not None
-                        }))
+                        if websocket.client_state.value == 1:
+                            await websocket.send_text(json.dumps({
+                                "status": "processing",
+                                "stage": "llm",
+                                "transcript": transcript,
+                                "has_image": image_context is not None
+                            }))
+                            await asyncio.sleep(0.01)
                         
                         # Step 3: LLM - Get response (async, non-blocking) with optional image
                         llm_response = await get_llm_response(session_id, transcript, image_base64=image_context)
@@ -512,11 +528,16 @@ async def websocket_endpoint(websocket: WebSocket):
                                 continue
 
                             # Send LLM response text (optional feedback)
-                            await websocket.send_text(json.dumps({
-                                "status": "processing",
-                                "stage": "tts",
-                                "response": sentence
-                            }))
+                            if websocket.client_state.value == 1:
+                                await websocket.send_text(json.dumps({
+                                    "status": "processing",
+                                    "stage": "tts",
+                                    "response": sentence
+                                }))
+                                await asyncio.sleep(0.01)
+                            else:
+                                print(f"⚠ [{session_id}] WebSocket disconnected during LLM response")
+                                break
                             
                             # Step 4: TTS - Synthesize audio (blocking, run in thread pool)
                             wav_bytes = await asyncio.to_thread(
@@ -529,13 +550,21 @@ async def websocket_endpoint(websocket: WebSocket):
                             # Step 5: Stream audio response in chunks (async)
                             chunk_size = 4096  # 4KB chunks
                             for i in range(0, len(wav_bytes), chunk_size):
+                                # Check connection before each chunk
+                                if websocket.client_state.value != 1:
+                                    print(f"⚠ [{session_id}] WebSocket disconnected during audio streaming")
+                                    break
                                 chunk = wav_bytes[i:i + chunk_size]
                                 await websocket.send_bytes(chunk)
+                                # Small delay between chunks to prevent overwhelming client
+                                await asyncio.sleep(0.005)  # 5ms between audio chunks
                         
-                        # Send completion signal
-                        await websocket.send_text(json.dumps({
-                            "status": "complete"
-                        }))
+                        # Send completion signal (check connection first)
+                        if websocket.client_state.value == 1:
+                            await websocket.send_text(json.dumps({
+                                "status": "complete"
+                            }))
+                            await asyncio.sleep(0.01)
                         
                         print(f"✓ [{session_id}] Response streaming complete")
                     
@@ -544,11 +573,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         error_details = traceback.format_exc()
                         print(f"✗ [{session_id}] Processing error: {processing_error}")
                         print(f"   Stack trace:\n{error_details}")
-                        await websocket.send_text(json.dumps({
-                            "status": "error",
-                            "message": "An error occurred while processing your request.",
-                            "error_type": type(processing_error).__name__
-                        }))
+                        # Only send error message if connection still active
+                        if websocket.client_state.value == 1:
+                            try:
+                                await websocket.send_text(json.dumps({
+                                    "status": "error",
+                                    "message": "An error occurred while processing your request.",
+                                    "error_type": type(processing_error).__name__
+                                }))
+                            except Exception as send_error:
+                                print(f"⚠ [{session_id}] Could not send error message: {send_error}")
                     
                     finally:
                         # Reset audio buffer for next utterance
@@ -563,9 +597,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     if session_id in SESSION_IMAGES:
                         del SESSION_IMAGES[session_id]
                         print(f"🗑️ [{session_id}] Cleared stored image context on reset")
-                    await websocket.send_text(json.dumps({
-                        "status": "reset_complete"
-                    }))
+                    if websocket.client_state.value == 1:
+                        await websocket.send_text(json.dumps({
+                            "status": "reset_complete"
+                        }))
                     print(f"🔄 [{session_id}] Session reset")
     
     except WebSocketDisconnect:
