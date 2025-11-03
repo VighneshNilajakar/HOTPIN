@@ -1,5 +1,5 @@
 PS F:\Documents\HOTPIN\HOTPIN> python main.py
-INFO:     Started server process [9024]
+INFO:     Started server process [13640]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -35,17 +35,7 @@ Server ready at ws://0.0.0.0:8000/ws
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.143.111.214:56683 - "WebSocket /ws" [accepted]
-New WebSocket connection established
-INFO:     connection open
-Session initialized: esp32-cam-hotpin
-🔊 [esp32-cam-hotpin] Audio chunk 1: 16 bytes (total streamed: 16)
-🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
-🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
-INFO:     connection closed
-🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006, reason=)
-🧹 [esp32-cam-hotpin] Session cleaned up
-INFO:     10.143.111.214:56684 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:59432 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
@@ -53,10 +43,85 @@ Session initialized: esp32-cam-hotpin
 🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
 🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 8208)
 🔊 [esp32-cam-hotpin] Audio chunk 4: 4096 bytes (total streamed: 12304)
+🔊 [esp32-cam-hotpin] Audio chunk 5: 4096 bytes (total streamed: 16400)
 INFO:     connection closed
 🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006, reason=)
 🧹 [esp32-cam-hotpin] Session cleaned up
-INFO:     10.143.111.214:56685 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:59433 - "WebSocket /ws" [accepted]
+New WebSocket connection established
+INFO:     connection open
+Session initialized: esp32-cam-hotpin
+📷 [hotpin-998C64-24] Image received: image.jpg, 10481 bytes (10.24 KB)
+🖼️ [hotpin-998C64-24] Image stored in session context (base64 size: 13976 chars)
+💾 [hotpin-998C64-24] Image saved: captured_images/hotpin-998C64-24_20251103_231603.jpg
+INFO:     10.143.111.214:59434 - "POST /image HTTP/1.1" 200 OK
+🔊 [esp32-cam-hotpin] Audio chunk 1: 16 bytes (total streamed: 16)
+🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 4112)
+⚠ [esp32-cam-hotpin] Failed to send acknowledgment: 
+   Stack trace:
+Traceback (most recent call last):
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 945, in transfer_data
+    message = await self.read_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 1015, in read_message
+    frame = await self.read_data_frame(max_size=self.max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 1090, in read_data_frame
+    frame = await self.read_frame(max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 1147, in read_frame
+    frame = await Frame.read(
+            ^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\framing.py", line 71, in read
+    data = await reader(2)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\asyncio\streams.py", line 767, in readexactly
+    raise exceptions.IncompleteReadError(incomplete, n)
+asyncio.exceptions.IncompleteReadError: 0 bytes read on a total of 2 expected bytes 
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 332, in asgi_send  
+    await self.send(data)  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 620, in send
+    await self.ensure_open()
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\websockets\legacy\protocol.py", line 921, in ensure_open
+    raise self.connection_closed_exc()
+websockets.exceptions.ConnectionClosedError: no close frame received or sent        
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\starlette\websockets.py", line 86, in send
+    await self._send(message)
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\starlette\_exception_handler.py", line 39, in sender
+    await send(message)
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 345, in asgi_send  
+    raise ClientDisconnected from exc
+uvicorn.protocols.utils.ClientDisconnected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "F:\Documents\HOTPIN\HOTPIN\main.py", line 413, in websocket_endpoint        
+    await websocket.send_text(json.dumps({
+    ...<3 lines>...
+    }))
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\starlette\websockets.py", line 166, in send_text
+    await self.send({"type": "websocket.send", "text": data})
+  File "C:\Users\Vighnesh Nilajakar\AppData\Local\Programs\Python\Python313\Lib\site-packages\starlette\websockets.py", line 89, in send
+    raise WebSocketDisconnect(code=1006)
+starlette.websockets.WebSocketDisconnect
+
+INFO:     connection closed
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006, reason=)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     10.143.111.214:59435 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
