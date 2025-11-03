@@ -231,6 +231,14 @@ esp_err_t tts_decoder_start(void) {
         return ESP_OK;
     }
 
+    // CRITICAL CHECK: Verify I2S driver is initialized before starting playback
+    // This prevents ESP_ERR_INVALID_STATE when audio arrives after mode transition
+    if (!audio_driver_is_initialized()) {
+        ESP_LOGW(TAG, "Cannot start TTS decoder - I2S driver not initialized (likely in camera mode)");
+        ESP_LOGW(TAG, "Audio will be buffered but not played until voice mode is re-entered");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     // Initialize decoder
     if (tts_decoder_init() != ESP_OK) {
         return ESP_FAIL;
@@ -842,6 +850,18 @@ static void tts_playback_task(void *pvParameters) {
     
     ESP_LOGI(TAG, "🎵 TTS playback task exiting (played %zu bytes, result: %s)", 
              pcm_bytes_played, esp_err_to_name(playback_result));
+    
+    // Play completion feedback if playback was successful (played significant audio)
+    // This signals to user that response is complete and they can provide next input
+    if (playback_result == ESP_OK && pcm_bytes_played > 10000) {  // > 10KB indicates real content played
+        ESP_LOGI(TAG, "Playing TTS completion feedback to signal readiness for next input");
+        esp_err_t fb_ret = audio_feedback_beep_triple(false);  // Triple beep: "Ready for next input"
+        if (fb_ret != ESP_OK) {
+            ESP_LOGW(TAG, "TTS completion feedback failed: %s", esp_err_to_name(fb_ret));
+        }
+        // Small delay to let feedback complete before cleanup
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     
     // CRITICAL FIX: Free PSRAM-allocated DMA buffer before task exits
     if (dma_buffer != NULL) {

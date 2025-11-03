@@ -86,6 +86,22 @@ static const tone_segment_t CAPTURE_SEQUENCE[] = {
     {.is_noise = true, .primary_freq_hz = 0.0f, .secondary_freq_hz = 0.0f, .duration_ms = 160, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
+// Double beep: "Processing, please wait"
+static const tone_segment_t PROCESSING_SEQUENCE[] = {
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 80,  .amplitude = 0.0f},
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+};
+
+// Triple ascending beep: "Response complete, ready for next input"
+static const tone_segment_t TTS_COMPLETE_SEQUENCE[] = {
+    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 60,  .amplitude = 0.0f},
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 60,  .amplitude = 0.0f},
+    {.is_noise = false, .primary_freq_hz = NOTE_G4, .secondary_freq_hz = 0.0f, .duration_ms = 140, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+};
+
 esp_err_t feedback_player_init(void) {
     if (s_initialized) {
         return ESP_OK;
@@ -140,6 +156,14 @@ esp_err_t feedback_player_play(feedback_sound_t sound) {
         case FEEDBACK_SOUND_CAPTURE:
             sequence = CAPTURE_SEQUENCE;
             count = sizeof(CAPTURE_SEQUENCE) / sizeof(CAPTURE_SEQUENCE[0]);
+            break;
+        case FEEDBACK_SOUND_PROCESSING:
+            sequence = PROCESSING_SEQUENCE;
+            count = sizeof(PROCESSING_SEQUENCE) / sizeof(PROCESSING_SEQUENCE[0]);
+            break;
+        case FEEDBACK_SOUND_TTS_COMPLETE:
+            sequence = TTS_COMPLETE_SEQUENCE;
+            count = sizeof(TTS_COMPLETE_SEQUENCE) / sizeof(TTS_COMPLETE_SEQUENCE[0]);
             break;
         default:
             ESP_LOGE(TAG, "Invalid sound id: %d", sound);

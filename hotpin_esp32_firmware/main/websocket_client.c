@@ -18,7 +18,9 @@
 #include "stt_pipeline.h"
 #include "tts_decoder.h"
 #include "audio_feedback.h"
-#include "state_manager.h"  // ✅ Added for state checking before TTS start
+#include "feedback_player.h"  // ✅ Added for processing/completion feedback sounds
+#include "led_controller.h"   // ✅ Added for LED state feedback during processing
+#include "state_manager.h"    // ✅ Added for state checking before TTS start
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_websocket_client.h"
@@ -1116,6 +1118,26 @@ static void update_pipeline_stage(const char *status, const char *stage) {
                  pipeline_stage_to_string(g_pipeline_stage),
                  pipeline_stage_to_string(new_stage));
         
+        // Provide audio + LED feedback when entering processing stages
+        // This informs user that system is working and they should wait
+        if (new_stage == WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION && 
+            g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_TRANSCRIPTION) {
+            ESP_LOGI(TAG, "Entering TRANSCRIPTION stage - playing processing feedback");
+            esp_err_t fb_ret = feedback_player_play(FEEDBACK_SOUND_PROCESSING);
+            if (fb_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Transcription stage feedback failed: %s", esp_err_to_name(fb_ret));
+            }
+            // Set LED to pulsing to indicate processing
+            led_controller_set_state(LED_STATE_PULSING);
+        }
+        
+        // Continue pulsing LED during LLM processing
+        if (new_stage == WEBSOCKET_PIPELINE_STAGE_LLM && 
+            g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_LLM) {
+            ESP_LOGI(TAG, "Entering LLM stage - continuing processing indication");
+            led_controller_set_state(LED_STATE_PULSING);
+        }
+        
         // Special handling for TTS stage transitions
         if (g_pipeline_stage == WEBSOCKET_PIPELINE_STAGE_TTS && 
             new_stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
@@ -1135,6 +1157,10 @@ static void update_pipeline_stage(const char *status, const char *stage) {
             g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
             ESP_LOGI(TAG, "Entering TTS stage - preparing for audio streaming");
             
+            // Set LED to breathing pattern to indicate audio is incoming
+            // This provides visual cue that response playback is starting
+            led_controller_set_state(LED_STATE_BREATHING);
+            
             // CRITICAL FIX: Always try to start TTS decoder when entering TTS stage
             // This ensures audio playback works even if user exits voice mode prematurely
             // The TTS decoder will buffer audio and play it when I2S is available
@@ -1149,6 +1175,21 @@ static void update_pipeline_stage(const char *status, const char *stage) {
             // Log warning if we're not in voice mode anymore
             if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
                 ESP_LOGW(TAG, "TTS audio arriving after voice mode exit (state=%d) - will attempt playback", current_state);
+            }
+        }
+        
+        // Restore LED state when pipeline completes
+        // User should see breathing LED (same as camera standby mode)
+        if (new_stage == WEBSOCKET_PIPELINE_STAGE_COMPLETE && 
+            g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_COMPLETE) {
+            ESP_LOGI(TAG, "Pipeline complete - checking system state for LED restore");
+            system_state_t current_state = state_manager_get_state();
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                // Still in voice mode - restore solid LED (ready for next input)
+                led_controller_set_state(LED_STATE_SOLID);
+            } else if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
+                // Back to camera mode - restore breathing LED
+                led_controller_set_state(LED_STATE_BREATHING);
             }
         }
         

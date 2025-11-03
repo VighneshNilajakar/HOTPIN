@@ -18,7 +18,9 @@ typedef enum {
     FEEDBACK_SOUND_ERROR,
     FEEDBACK_SOUND_REC_START,
     FEEDBACK_SOUND_REC_STOP,
-    FEEDBACK_SOUND_CAPTURE
+    FEEDBACK_SOUND_CAPTURE,
+    FEEDBACK_SOUND_PROCESSING,      // Double beep for "processing, please wait"
+    FEEDBACK_SOUND_TTS_COMPLETE     // Triple ascending beep for "response complete, ready for input"
 } feedback_sound_t;
 
 esp_err_t feedback_player_init(void);
