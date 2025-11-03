@@ -602,6 +602,7 @@ static void tts_playback_task(void *pvParameters) {
     
     esp_err_t playback_result = ESP_OK;
     uint32_t last_activity_timestamp = (uint32_t)(esp_timer_get_time() / 1000);
+    uint8_t consecutive_i2s_failures = 0;  // Track consecutive I2S errors for graceful degradation
 
     while (is_running) {
         // ✅ FIX #8: Check for stop request at top of loop BEFORE blocking on buffer receive
@@ -708,6 +709,15 @@ static void tts_playback_task(void *pvParameters) {
                     // Play any remaining PCM data from the header buffer
                     size_t pcm_len = header_bytes_received - header_consumed;
                     if (pcm_len > 0) {
+                        // Check I2S state before attempting write
+                        if (!audio_driver_is_initialized()) {
+                            ESP_LOGW(TAG, "I2S deinitialized before initial PCM write - aborting playback");
+                            is_running = false;
+                            playback_completed = true;
+                            playback_result = ESP_ERR_INVALID_STATE;
+                            break;
+                        }
+                        
                         size_t accounted = 0;
                         esp_err_t write_ret = write_pcm_chunk_to_driver(header_buffer + header_consumed,
                                                                        pcm_len,
@@ -716,6 +726,12 @@ static void tts_playback_task(void *pvParameters) {
                             pcm_bytes_played += accounted;
                             ESP_LOGD(TAG, "Played %zu bytes from initial chunk (total: %zu)",
                                      accounted, pcm_bytes_played);
+                        } else if (write_ret == ESP_ERR_INVALID_STATE) {
+                            ESP_LOGW(TAG, "Initial PCM write failed - I2S deinitialized: %s", esp_err_to_name(write_ret));
+                            is_running = false;
+                            playback_completed = true;
+                            playback_result = write_ret;
+                            break;
                         } else {
                             ESP_LOGE(TAG, "Initial PCM write failed: %s", esp_err_to_name(write_ret));
                             playback_result = write_ret;
@@ -755,7 +771,25 @@ static void tts_playback_task(void *pvParameters) {
 
                 if (ret == ESP_OK) {
                     pcm_bytes_played += accounted;
+                    consecutive_i2s_failures = 0;  // Reset failure counter on success
                     ESP_LOGD(TAG, "Played %zu bytes (total: %zu)", accounted, pcm_bytes_played);
+                } else if (ret == ESP_ERR_INVALID_STATE || ret == ESP_ERR_TIMEOUT) {
+                    // I2S driver not available - could be during mode transition or re-initialization
+                    consecutive_i2s_failures++;
+                    ESP_LOGW(TAG, "PCM write failed (%s) - I2S unavailable (attempt %d/5), will retry", 
+                             esp_err_to_name(ret), consecutive_i2s_failures);
+                    
+                    if (consecutive_i2s_failures > 5) {
+                        ESP_LOGE(TAG, "I2S persistently unavailable after %d attempts - stopping playback", 
+                                 consecutive_i2s_failures);
+                        is_running = false;
+                        playback_completed = true;
+                        playback_result = ret;
+                        break;
+                    }
+                    
+                    // Small delay to allow I2S to stabilize if it's being re-initialized
+                    vTaskDelay(pdMS_TO_TICKS(50));
                 } else {
                     ESP_LOGE(TAG, "Audio playback error: %s", esp_err_to_name(ret));
                     playback_result = ret;
