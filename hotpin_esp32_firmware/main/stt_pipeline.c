@@ -790,6 +790,11 @@ static void audio_streaming_task(void *pvParameters) {
                             consecutive_send_failures = 0;
                             ESP_LOGD(TAG, "Streamed chunk #%u (%zu bytes, total: %u)",
                                      (unsigned int)chunk_count, bytes_read, (unsigned int)total_bytes_streamed);
+                            
+                            // CRITICAL FIX: Add small delay after successful send to pace transmission
+                            // This prevents TCP send buffer overflow by allowing the stack time to drain
+                            // 10ms delay = ~100 chunks/sec max = ~400KB/sec which is well above our ~32KB/sec audio rate
+                            vTaskDelay(pdMS_TO_TICKS(10));
                         } else {
                             // CRITICAL FIX: Enhanced error handling for send failures
                             // Check if the failure is due to connection issue

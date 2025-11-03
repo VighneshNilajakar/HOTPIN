@@ -373,6 +373,23 @@ async def websocket_endpoint(websocket: WebSocket):
                             f"🔊 [{session_id}] Audio chunk {stats['chunks']}: "
                             f"{len(audio_chunk)} bytes (total streamed: {stats['bytes']})"
                         )
+                    
+                    # CRITICAL FIX: Send acknowledgment every 5 chunks to prevent TCP buffer overflow
+                    # Reduced from 10 to 5 to provide faster flow control and keep WebSocket connection alive
+                    # This helps prevent send buffer saturation on ESP32 during sustained audio streaming
+                    if (stats["chunks"] % 5) == 0:
+                        try:
+                            await websocket.send_text(json.dumps({
+                                "status": "receiving",
+                                "chunks_received": stats["chunks"],
+                                "bytes_received": stats["bytes"]
+                            }))
+                            print(f"✓ [{session_id}] Sent acknowledgment at chunk {stats['chunks']}")
+                        except Exception as ack_error:
+                            import traceback
+                            error_details = traceback.format_exc()
+                            print(f"⚠ [{session_id}] Failed to send acknowledgment: {ack_error}")
+                            print(f"   Stack trace:\n{error_details}")
                 
                 # Optional: Send progress indicator
                 buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()

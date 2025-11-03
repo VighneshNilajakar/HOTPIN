@@ -133,13 +133,14 @@ esp_err_t websocket_client_init(const char *uri, const char *auth_token) {
         .headers = (auth_token != NULL && strlen(auth_token) > 0) ? headers : NULL,
         .reconnect_timeout_ms = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS,
         .network_timeout_ms = CONFIG_WEBSOCKET_TIMEOUT_MS,
-        .buffer_size = 16384,  // Increased buffer for large audio chunks (doubled from 8192)
+        .buffer_size = 32768,  // CRITICAL: Increased to 32KB to handle sustained audio streaming (4x increase)
         .task_stack = 8192,   // Increased stack for callbacks
         .task_prio = TASK_PRIORITY_WEBSOCKET,
         .disable_auto_reconnect = true,   // Use manual reconnection logic to avoid double-start races
         .keep_alive_enable = true,         // Enable TCP keepalive
         .keep_alive_idle = 45,             // Keep-alive idle time in seconds (45s)
         .keep_alive_interval = 15,         // Keep-alive interval in seconds (15s)
+        .ping_interval_sec = 10,           // CRITICAL: Send WebSocket ping every 10s to keep connection alive
         .cert_pem = NULL,                 // No certificate validation for now
         .transport = WEBSOCKET_TRANSPORT_OVER_TCP, // Explicit TCP transport
         .use_global_ca_store = false,      // No global CA store
@@ -662,6 +663,22 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32
         }
         
         int ret = esp_websocket_client_send_bin(g_ws_client, (const char *)data, length, pdMS_TO_TICKS(effective_timeout));
+        
+        // CRITICAL FIX: Handle the case where send returns 0 (socket buffer full, need to wait)
+        if (ret == 0) {
+            ESP_LOGW(TAG, "WebSocket send buffer full (0 bytes sent), yielding and retrying (attempt %u/%u)", 
+                     (unsigned int)(attempt + 1), (unsigned int)(max_retries + 1));
+            // Yield to allow TCP/IP stack to drain send buffer
+            vTaskDelay(pdMS_TO_TICKS(100));
+            // Don't count this as a failure, just retry
+            if (attempt == max_retries) {
+                ESP_LOGE(TAG, "WebSocket send buffer remained full after %u attempts", (unsigned int)(max_retries + 1));
+                last_error = ESP_ERR_TIMEOUT;
+                s_send_failure_count++;
+            }
+            continue;  // Retry without incrementing failure counter
+        }
+        
         if (ret >= 0) {
             // Success - reset failure counter
             s_send_failure_count = 0;
@@ -677,6 +694,7 @@ esp_err_t websocket_client_send_audio(const uint8_t *data, size_t length, uint32
             return ESP_OK;
         }
         
+        // ret < 0 indicates an actual error
         last_error = ESP_FAIL;
         s_send_failure_count++;
         
@@ -1117,18 +1135,20 @@ static void update_pipeline_stage(const char *status, const char *stage) {
             g_pipeline_stage != WEBSOCKET_PIPELINE_STAGE_TTS) {
             ESP_LOGI(TAG, "Entering TTS stage - preparing for audio streaming");
             
-            // ✅ FIX: Only start TTS decoder if we're still in voice mode
-            // Prevents starting TTS during camera transition when server response arrives late
+            // CRITICAL FIX: Always try to start TTS decoder when entering TTS stage
+            // This ensures audio playback works even if user exits voice mode prematurely
+            // The TTS decoder will buffer audio and play it when I2S is available
             system_state_t current_state = state_manager_get_state();
-            if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-                // Ensure TTS decoder is ready for incoming audio
-                esp_err_t ret = tts_decoder_start();
-                if (ret != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to start TTS decoder for streaming: %s", esp_err_to_name(ret));
-                }
-            } else {
-                ESP_LOGW(TAG, "Ignoring TTS stage - not in voice mode (state=%d)", current_state);
-                ESP_LOGW(TAG, "Server response arrived after mode transition - audio will be discarded");
+            
+            // Always attempt to start TTS decoder for incoming audio
+            esp_err_t ret = tts_decoder_start();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to start TTS decoder for streaming: %s", esp_err_to_name(ret));
+            }
+            
+            // Log warning if we're not in voice mode anymore
+            if (current_state != SYSTEM_STATE_VOICE_ACTIVE) {
+                ESP_LOGW(TAG, "TTS audio arriving after voice mode exit (state=%d) - will attempt playback", current_state);
             }
         }
         
