@@ -62,6 +62,9 @@ load_dotenv()
 # Maps session_id -> io.BytesIO buffer containing raw PCM audio
 SESSION_AUDIO_BUFFERS: Dict[str, io.BytesIO] = {}
 
+# Lightweight telemetry for debugging: tracks per-session audio chunks
+SESSION_AUDIO_STATS: Dict[str, Dict[str, int]] = {}
+
 # Server configuration
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", 8000))
@@ -335,6 +338,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Initialize audio buffer for this session
         SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+        SESSION_AUDIO_STATS[session_id] = {"chunks": 0, "bytes": 0}
         
         # Send acknowledgment
         await websocket.send_text(json.dumps({
@@ -350,7 +354,8 @@ async def websocket_endpoint(websocket: WebSocket):
             message_type = message.get("type")
             if message_type == "websocket.disconnect":
                 code = message.get("code", 1000)
-                print(f"🔌 [{session_id}] WebSocket disconnect received (code={code})")
+                reason = message.get("reason")
+                print(f"🔌 [{session_id}] WebSocket disconnect received (code={code}, reason={reason})")
                 break
             
             # Handle binary audio data
@@ -359,6 +364,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Append to session buffer
                 SESSION_AUDIO_BUFFERS[session_id].write(audio_chunk)
+                stats = SESSION_AUDIO_STATS.get(session_id)
+                if stats is not None:
+                    stats["chunks"] += 1
+                    stats["bytes"] += len(audio_chunk)
+                    if stats["chunks"] <= 5 or (stats["chunks"] % 25) == 0:
+                        print(
+                            f"🔊 [{session_id}] Audio chunk {stats['chunks']}: "
+                            f"{len(audio_chunk)} bytes (total streamed: {stats['bytes']})"
+                        )
                 
                 # Optional: Send progress indicator
                 buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()
@@ -380,6 +394,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         print(f"⚠ [{session_id}] Empty audio buffer, skipping processing")
                         # Reset buffer
                         SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+                        SESSION_AUDIO_STATS[session_id] = {"chunks": 0, "bytes": 0}
                         continue
                     
                     print(f"🔄 [{session_id}] Processing {len(pcm_data)} bytes of audio...")
@@ -476,6 +491,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     finally:
                         # Reset audio buffer for next utterance
                         SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+                        SESSION_AUDIO_STATS[session_id] = {"chunks": 0, "bytes": 0}
                         print(f"🔄 [{session_id}] Buffer reset, ready for next input")
                 
                 elif signal_type == "RESET":
@@ -502,6 +518,8 @@ async def websocket_endpoint(websocket: WebSocket):
         if session_id:
             if session_id in SESSION_AUDIO_BUFFERS:
                 del SESSION_AUDIO_BUFFERS[session_id]
+            if session_id in SESSION_AUDIO_STATS:
+                del SESSION_AUDIO_STATS[session_id]
             clear_session_context(session_id)
             print(f"🧹 [{session_id}] Session cleaned up")
 

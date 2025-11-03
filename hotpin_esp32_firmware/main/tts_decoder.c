@@ -46,8 +46,8 @@ typedef struct {
 
 // Stream buffer for audio data
 // Increased buffer size for better buffering performance
-#define TTS_STREAM_BUFFER_SIZE (64 * 1024)  // Increased from 16KB to 64KB for better buffering
-#define TTS_STREAM_BUFFER_TRIGGER_LEVEL (8 * 1024)  // Increased from 1KB to 8KB trigger level
+#define TTS_STREAM_BUFFER_SIZE (192 * 1024)  // Allow full TTS responses to buffer without drops
+#define TTS_STREAM_BUFFER_TRIGGER_LEVEL (16 * 1024)  // Maintain reasonable trigger threshold for streaming
 #define AUDIO_CHUNK_SIZE        4096        // DMA buffer size for I2S playback
 static StreamBufferHandle_t g_audio_stream_buffer = NULL;
 static uint8_t* g_stream_buffer_storage = NULL; // Storage will be in PSRAM
@@ -414,33 +414,31 @@ bool tts_decoder_is_receiving_audio(void) {
 
 static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
     static uint32_t chunk_count = 0;
+    static uint32_t rejected_count = 0;
+    static uint32_t last_log_count = 0;
     chunk_count++;
-    
+
     // ✅ FIX #5: Reject audio data if TTS decoder is not running
     // This prevents buffer overflow when server sends audio after mode transition
     if (!is_running || g_playback_task_handle == NULL) {
-        static uint32_t rejected_count = 0;
-        static uint32_t last_log_count = 0;
         rejected_count++;
-        
+
         // ✅ FIX: Further reduce log spam - only log first, every 50th, and reset on new session
         // This prevents hundreds of warnings during mode transitions
-        if (rejected_count == 1 || 
+        if (rejected_count == 1 ||
             (rejected_count >= 50 && (rejected_count % 50) == 0) ||
             (rejected_count - last_log_count) >= 100) {
-            ESP_LOGW(TAG, "Rejecting audio chunks - TTS decoder not running (chunks rejected: %u, last: %zu bytes)", 
+            ESP_LOGW(TAG, "Rejecting audio chunks - TTS decoder not running (chunks rejected: %u, last: %zu bytes)",
                      (unsigned int)rejected_count, len);
             last_log_count = rejected_count;
         }
         return;
     }
-    
-    // Reset rejection counter when decoder is running
-    static uint32_t last_running_check = 0;
-    if (chunk_count > last_running_check + 10) {
-        static uint32_t rejected_count = 0;  // Reset counter
+
+    // Clear rejection counters once the decoder starts processing audio again
+    if (rejected_count != 0) {
         rejected_count = 0;
-        last_running_check = chunk_count;
+        last_log_count = 0;
     }
     
     ESP_LOGI(TAG, "Received audio chunk #%u: %zu bytes", (unsigned int)chunk_count, len);
@@ -478,60 +476,73 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
                 return;
             }
         }
-        
-        // Check available space before sending to prevent blocking
-        size_t available_space = xStreamBufferSpacesAvailable(g_audio_stream_buffer);
-        
-        // If buffer is nearly full, drop the data to prevent blocking
-        if (available_space < (len + 1024)) {  // Leave 1KB safety margin
-            static uint32_t drop_count = 0;
-            drop_count++;
-            if ((drop_count % 25) == 0) {  // Log every 25 drops to prevent log spam
-                ESP_LOGW(TAG, "Stream buffer nearly full - dropping %zu bytes (available: %zu, drops: %u)", 
-                         len, available_space, (unsigned int)drop_count);
+
+        // Push the entire chunk into the stream buffer, yielding while we wait for space
+        const TickType_t per_attempt_wait = pdMS_TO_TICKS(40);
+        const TickType_t max_wait_ticks = pdMS_TO_TICKS(1000);  // Allow up to 1s per chunk before giving up
+        TickType_t wait_start = xTaskGetTickCount();
+        size_t total_sent = 0;
+
+        while (total_sent < len) {
+            size_t remaining = len - total_sent;
+            size_t sent = xStreamBufferSend(g_audio_stream_buffer,
+                                            data + total_sent,
+                                            remaining,
+                                            per_attempt_wait);
+
+            if (sent == 0) {
+                if ((xTaskGetTickCount() - wait_start) >= max_wait_ticks) {
+                    static uint32_t timeout_count = 0;
+                    timeout_count++;
+                    uint32_t waited_ms = (uint32_t)((xTaskGetTickCount() - wait_start) * portTICK_PERIOD_MS);
+                    ESP_LOGW(TAG, "Stream buffer congested - dropped %zu bytes after %u ms (timeouts: %u)",
+                             remaining,
+                             (unsigned int)waited_ms,
+                             (unsigned int)timeout_count);
+                    break;
+                }
+
+                // Give the playback task time to drain while keeping watchdog happy
+                safe_task_wdt_reset();
+                continue;
             }
+
+            total_sent += sent;
+        }
+
+        if (total_sent != len) {
+            // Chunk was not fully enqueued - treat remaining bytes as dropped
             return;
         }
-        
-        // Send data with shorter timeout to prevent blocking
-        size_t bytes_sent = xStreamBufferSend(g_audio_stream_buffer, data, len, pdMS_TO_TICKS(25));
-        if (bytes_sent != len) {
-            static uint32_t timeout_count = 0;
-            timeout_count++;
-            if ((timeout_count % 10) == 0) {  // Log every 10 timeouts to prevent log spam
-                ESP_LOGW(TAG, "Stream buffer timeout - dropped %zu bytes (sent: %zu, timeouts: %u)", 
-                         len - bytes_sent, bytes_sent, (unsigned int)timeout_count);
+
+        bytes_received += len;
+
+        // ✅ FIX: Mark audio data received only AFTER successfully sending data to buffer
+        if (!audio_data_received) {
+            audio_data_received = true;
+            ESP_LOGI(TAG, "🎙️ First real audio data received for session (%zu bytes)", len);
+
+            // Send session start notification for the first audio chunk
+            system_event_t evt = {
+                .type = SYSTEM_EVENT_TTS_PLAYBACK_STARTED,
+                .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
+            };
+            if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
+                ESP_LOGW(TAG, "Failed to enqueue TTS playback start event");
             }
-        } else {
-            bytes_received += len;
-            
-            // ✅ FIX: Mark audio data received only AFTER successfully sending data to buffer
-            if (!audio_data_received) {
-                audio_data_received = true;
-                ESP_LOGI(TAG, "🎙️ First real audio data received for session (%zu bytes)", len);
-                
-                // Send session start notification for the first audio chunk
-                system_event_t evt = {
-                    .type = SYSTEM_EVENT_TTS_PLAYBACK_STARTED,
-                    .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000),
-                };
-                if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(10))) {
-                    ESP_LOGW(TAG, "Failed to enqueue TTS playback start event");
-                }
-            }
-            
-            static uint32_t success_count = 0;
-            success_count++;
-            if ((success_count % 100) == 0) {  // Log every 100 successes to prevent log spam
-                ESP_LOGD(TAG, "Sent %zu bytes to stream buffer (total received: %zu, successes: %u)", 
-                         len, bytes_received, (unsigned int)success_count);
-            }
-            
-            // Reset playback completed flag when new data arrives
-            if (playback_completed) {
-                ESP_LOGD(TAG, "New audio data received, resetting playback completed flag");
-                playback_completed = false;
-            }
+        }
+
+        static uint32_t success_count = 0;
+        success_count++;
+        if ((success_count % 100) == 0) {  // Log every 100 successes to prevent log spam
+            ESP_LOGD(TAG, "Sent %zu bytes to stream buffer (total received: %zu, successes: %u)",
+                     len, bytes_received, (unsigned int)success_count);
+        }
+
+        // Reset playback completed flag when new data arrives
+        if (playback_completed) {
+            ESP_LOGD(TAG, "New audio data received, resetting playback completed flag");
+            playback_completed = false;
         }
     } else {
         // Only log when decoder is not initialized at all
@@ -1375,6 +1386,8 @@ esp_err_t tts_decoder_flush_and_reset(void) {
     
     // Now reset the session to ensure clean state for next session
     tts_decoder_reset_session();
+    is_playing = false;
+    is_running = false;
     
     ESP_LOGI(TAG, "✅ TTS decoder flushed and reset for next session");
     return ESP_OK;

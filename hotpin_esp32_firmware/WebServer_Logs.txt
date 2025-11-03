@@ -1,5 +1,5 @@
 PS F:\Documents\HOTPIN\HOTPIN> python main.py
-INFO:     Started server process [10984]
+INFO:     Started server process [6684]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -16,9 +16,9 @@ Network Information:
 Groq AsyncClient initialized with model: llama-3.1-8b-instant
 Loading Vosk model from: ./model
 LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=10 max-active=3000 lattice-beam=2
-LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:6:7:8:9:10      
+LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:6:7:8:9:10
 LOG (VoskAPI:RemoveOrphanNodes():nnet-nnet.cc:948) Removed 1 orphan nodes.
-LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 2 orphan components.
+LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 2 orphan components.    
 LOG (VoskAPI:Collapse():nnet-utils.cc:1488) Added 1 components, removed 2
 LOG (VoskAPI:ReadDataFiles():model.cc:248) Loading i-vector extractor from ./model/ivector/final.ie
 LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:183) Computing derived variables for iVector extractor
@@ -35,29 +35,17 @@ Server ready at ws://0.0.0.0:8000/ws
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.143.111.214:49387 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:54194 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 81936 bytes of audio...
-Transcription [esp32-cam-hotpin]: "hello"
-📝 [esp32-cam-hotpin] Transcript: "hello"
-🤖 [esp32-cam-hotpin] LLM response: "Hello, how can I assist you today?"
-TTS synthesis completed: 94404 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_mcgr8bf3.wav
-🔊 [esp32-cam-hotpin] Streaming 94404 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-📷 [hotpin-998C64-25] Image received: image.jpg, 9254 bytes (9.04 KB)
-💾 [hotpin-998C64-25] Image saved: captured_images/hotpin-998C64-25_20251103_005815.jpg
-INFO:     10.143.111.214:49388 - "POST /image HTTP/1.1" 200 OK
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 155664 bytes of audio...
-Empty transcription for session: esp32-cam-hotpin
-⚠ [esp32-cam-hotpin] Empty transcription
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
+INFO:     connection closed
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1006)
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     10.143.111.214:54195 - "WebSocket /ws" [accepted]
+New WebSocket connection established
+INFO:     connection open
+Session initialized: esp32-cam-hotpin
 🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005)
-✓ Cleared context for session: esp32-cam-hotpin
 🧹 [esp32-cam-hotpin] Session cleaned up
 INFO:     connection closed

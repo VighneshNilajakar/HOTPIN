@@ -24,19 +24,33 @@
 #include "esp_websocket_client.h"
 #include "esp_task_wdt.h"  // Added for esp_task_wdt_reset
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "cJSON.h"
 #include "inttypes.h"
 #include <string.h>
 
 // Safe watchdog reset function to prevent errors when task is not registered
 static const char *TAG = TAG_WEBSOCKET;
+static TaskHandle_t s_health_check_task_handle = NULL;
 
 // Safe watchdog reset function to prevent errors when task is not registered
 // ✅ IMPROVED: Suppress common benign errors (ESP_ERR_NOT_FOUND, ESP_ERR_INVALID_ARG)
 // These occur during task shutdown and are not actual errors
+extern TaskHandle_t g_websocket_task_handle;
+
+// Only tasks that are registered with the TWDT should attempt a reset; otherwise
+// ESP-IDF logs an error even though we suppress it locally. Guard by task handle.
 static inline void safe_task_wdt_reset(void) {
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    if (current == NULL) {
+        return;
+    }
+
+    if (current != g_websocket_task_handle && current != s_health_check_task_handle) {
+        return;  // Skip resets for unregistered helper tasks (reconnect, event loop, etc.)
+    }
+
     esp_err_t ret = esp_task_wdt_reset();
-    // Only log unexpected errors - suppress benign shutdown race conditions
     if (ret != ESP_OK && ret != ESP_ERR_NOT_FOUND && ret != ESP_ERR_INVALID_ARG) {
         ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(ret));
     }
@@ -63,9 +77,6 @@ static void *g_audio_callback_arg = NULL;
 // Callback function pointer for status messages
 static websocket_status_callback_t g_status_callback = NULL;
 static void *g_status_callback_arg = NULL;
-
-// Task handle for health check task
-static TaskHandle_t s_health_check_task_handle = NULL;
 
 // Task handles for reconnect tasks
 static TaskHandle_t s_reconnect_task_handle = NULL;
@@ -125,7 +136,7 @@ esp_err_t websocket_client_init(const char *uri, const char *auth_token) {
         .buffer_size = 16384,  // Increased buffer for large audio chunks (doubled from 8192)
         .task_stack = 8192,   // Increased stack for callbacks
         .task_prio = TASK_PRIORITY_WEBSOCKET,
-        .disable_auto_reconnect = false,  // Enable auto-reconnect
+        .disable_auto_reconnect = true,   // Use manual reconnection logic to avoid double-start races
         .keep_alive_enable = true,         // Enable TCP keepalive
         .keep_alive_idle = 45,             // Keep-alive idle time in seconds (45s)
         .keep_alive_interval = 15,         // Keep-alive interval in seconds (15s)
@@ -204,6 +215,18 @@ esp_err_t websocket_client_connect(void) {
         return ESP_ERR_INVALID_STATE;
     }
     
+    // Sync with driver state in case internal flags drifted
+    if (esp_websocket_client_is_connected(g_ws_client)) {
+        if (!is_connected) {
+            ESP_LOGW(TAG, "WebSocket client already connected (syncing internal flags)");
+        } else {
+            ESP_LOGD(TAG, "WebSocket client already connected");
+        }
+        is_connected = true;
+        is_started = true;
+        return ESP_OK;
+    }
+
     if (is_connected) {
         ESP_LOGW(TAG, "Already connected");
         return ESP_OK;
@@ -211,6 +234,12 @@ esp_err_t websocket_client_connect(void) {
     
     // Stop any existing connection attempt first to clean up state
     if (is_started) {
+        if (esp_websocket_client_is_connected(g_ws_client)) {
+            ESP_LOGD(TAG, "WebSocket client start already in progress and link is healthy");
+            return ESP_OK;
+        }
+
+        ESP_LOGW(TAG, "WebSocket client marked as started but link not connected - forcing restart");
         esp_err_t stop_ret = esp_websocket_client_stop(g_ws_client);
         if (stop_ret != ESP_OK && stop_ret != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(TAG, "WebSocket client stop before connect: %s", esp_err_to_name(stop_ret));
@@ -252,6 +281,17 @@ esp_err_t websocket_client_connect(void) {
     
     esp_err_t ret = esp_websocket_client_start(g_ws_client);
     if (ret != ESP_OK) {
+        // Treat duplicate start attempts as success if the transport is already running
+        if ((ret == ESP_ERR_INVALID_STATE || ret == ESP_FAIL) &&
+            esp_websocket_client_is_connected(g_ws_client)) {
+            ESP_LOGW(TAG, "WebSocket client already active, ignoring duplicate start request");
+            is_started = true;
+            is_connected = true;
+            s_reconnect_attempt_count = 0;
+            s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS;
+            return ESP_OK;
+        }
+
         s_reconnect_attempt_count++; // Increment attempt counter on failure
         ESP_LOGE(TAG, "Failed to start WebSocket client: %s (attempt %u)", 
                  esp_err_to_name(ret), (unsigned int)s_reconnect_attempt_count);
