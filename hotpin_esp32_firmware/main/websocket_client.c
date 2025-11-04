@@ -314,24 +314,26 @@ esp_err_t websocket_client_connect(void) {
     
     s_reconnect_attempt_count = 0; // Reset counter on successful connection
     s_last_reconnect_delay = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS; // Reset delay as well
-    // CRITICAL IMPROVEMENT: Add health check task for connection stability
-    // The s_health_check_task_handle is now a global variable declared earlier
+    
+    // ✅ FIX: DISABLED redundant health check task
+    // Connection management is now centralized in websocket_connection_task in main.c
+    // This eliminates watchdog conflicts and simplifies error recovery
+    // The health check task was competing with state_manager and causing deadlocks
+    /*
     BaseType_t health_ret = xTaskCreate(
         websocket_health_check_task,
         "ws_health_check",
-        2048,  // Stack size
-        NULL,  // No parameters
-        TASK_PRIORITY_WEBSOCKET - 2,  // Lower priority than main WebSocket task
+        2048,
+        NULL,
+        TASK_PRIORITY_WEBSOCKET - 2,
         &s_health_check_task_handle
     );
     
     if (health_ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to create WebSocket health check task: %d", (int)health_ret);
-        s_health_check_task_handle = NULL; // Make sure it's null on failure
+        s_health_check_task_handle = NULL;
     } else {
         ESP_LOGI(TAG, "✅ WebSocket health check task created");
-        
-        // Register the health check task with the WDT
         esp_err_t wdt_ret = esp_task_wdt_add(s_health_check_task_handle);
         if (wdt_ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to add health check task to WDT: %s", esp_err_to_name(wdt_ret));
@@ -339,8 +341,10 @@ esp_err_t websocket_client_connect(void) {
             ESP_LOGD(TAG, "Health check task added to WDT successfully");
         }
     }
+    */
+    s_health_check_task_handle = NULL; // No health check task
     
-    ESP_LOGI(TAG, "WebSocket client started");
+    ESP_LOGI(TAG, "WebSocket client started (health check disabled - managed by main connection task)");
     is_started = true;
     return ESP_OK;
 }

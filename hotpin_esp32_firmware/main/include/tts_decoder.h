@@ -55,6 +55,13 @@ esp_err_t tts_decoder_stop(void);
 bool tts_decoder_is_playing(void);
 
 /**
+ * @brief Check if TTS decoder is running (task active)
+ * 
+ * @return true if decoder task is running, false otherwise
+ */
+bool tts_decoder_is_running(void);
+
+/**
  * @brief Check if TTS is currently receiving audio data from server
  * 
  * Returns true if the TTS decoder is actively receiving audio chunks via WebSocket.

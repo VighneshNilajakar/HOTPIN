@@ -562,6 +562,12 @@ static void websocket_connection_task(void *pvParameters) {
             xEventGroupSetBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
             retry_delay_ms = 5000;
 
+            // ✅ STABILITY FIX: Monitor connection health with shorter intervals
+            // This allows faster detection of transport errors and prevents watchdog starvation
+            int health_checks = 0;
+            const int HEALTH_CHECK_INTERVAL_MS = 1000;  // Check every 1 second
+            const int MAX_HEALTH_CHECKS = 30;  // 30 seconds before forced reconnect
+            
             while (websocket_client_is_connected() &&
                    (xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
                 // Check for system shutdown state
@@ -581,7 +587,16 @@ static void websocket_connection_task(void *pvParameters) {
                     ESP_LOGD(TAG, "WDT reset failed: %s", esp_err_to_name(wdt_ret));
                 }
                 
-                vTaskDelay(pdMS_TO_TICKS(2000));
+                vTaskDelay(pdMS_TO_TICKS(HEALTH_CHECK_INTERVAL_MS));
+                health_checks++;
+                
+                // ✅ STABILITY FIX: Force reconnect if connection appears stale
+                // This prevents silent failures where websocket_client_is_connected() returns true
+                // but the underlying transport has errors (e.g., transport_poll_write failures)
+                if (health_checks >= MAX_HEALTH_CHECKS) {
+                    ESP_LOGW(TAG, "⚠️ Connection health check timeout - forcing reconnect to prevent stale connection");
+                    break;  // Exit monitoring loop to trigger reconnection
+                }
             }
 
             // Check for system shutdown state
@@ -594,10 +609,17 @@ static void websocket_connection_task(void *pvParameters) {
                 break;
             }
 
-            ESP_LOGW(TAG, "WebSocket link not healthy, restarting connection");
+            // ✅ STABILITY FIX: Centralized reconnection logic
+            // This is the ONLY place where reconnection should be initiated
+            // Other tasks (state_manager, etc.) should only react to connection status
+            ESP_LOGW(TAG, "⚠️ WebSocket link not healthy, initiating reconnection sequence");
             xEventGroupClearBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
+            
+            // Force stop the client to clean up any stale state
             websocket_client_force_stop();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            
+            // Wait longer to ensure clean shutdown before reconnect attempt
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
         
             // Check for system shutdown state

@@ -1,5 +1,5 @@
 PS F:\Documents\HOTPIN\HOTPIN> python main.py
-INFO:     Started server process [14156]
+INFO:     Started server process [5776]
 INFO:     Waiting for application startup.
 
 ============================================================
@@ -35,7 +35,7 @@ Server ready at ws://0.0.0.0:8000/ws
 
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     10.143.111.214:51130 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:58027 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
@@ -49,46 +49,30 @@ Session initialized: esp32-cam-hotpin
 🔊 [esp32-cam-hotpin] Audio chunk 25: 4096 bytes (total streamed: 102400)
 ✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 30
 🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 135168 bytes of audio...
-Transcription [esp32-cam-hotpin]: "hello hello hello"
-📝 [esp32-cam-hotpin] Transcript: "hello hello hello"
-🤖 [esp32-cam-hotpin] LLM response: "Hello, how can I assist you today?"
-TTS synthesis completed: 94404 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_opj26g69.wav
-🔊 [esp32-cam-hotpin] Streaming 94404 bytes of audio response...
+🔄 [esp32-cam-hotpin] Processing 122880 bytes of audio...
+Transcription [esp32-cam-hotpin]: "hello"
+📝 [esp32-cam-hotpin] Transcript: "hello"
+🤖 [esp32-cam-hotpin] LLM response: "I'm Hotpin, your compact, helpful, and private voice assistant, here to provide you with quick and concise answers."
+TTS synthesis completed: 255986 bytes generated
+Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_5pg4_3oh.wav
+🔊 [esp32-cam-hotpin] Streaming 255986 bytes of audio response...
 ✓ [esp32-cam-hotpin] Response streaming complete
 🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-🔊 [esp32-cam-hotpin] Audio chunk 1: 4096 bytes (total streamed: 4096)
-🔊 [esp32-cam-hotpin] Audio chunk 2: 4096 bytes (total streamed: 8192)
-🔊 [esp32-cam-hotpin] Audio chunk 3: 4096 bytes (total streamed: 12288)
-🔊 [esp32-cam-hotpin] Audio chunk 4: 4096 bytes (total streamed: 16384)
-🔊 [esp32-cam-hotpin] Audio chunk 5: 4096 bytes (total streamed: 20480)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 10
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 20
-🔊 [esp32-cam-hotpin] Audio chunk 25: 4096 bytes (total streamed: 102400)
-✓ [esp32-cam-hotpin] Sent acknowledgment at chunk 30
-🎤 [esp32-cam-hotpin] End-of-speech signal received
-🔄 [esp32-cam-hotpin] Processing 135168 bytes of audio...
-Transcription [esp32-cam-hotpin]: "what's your what's your name"
-📝 [esp32-cam-hotpin] Transcript: "what's your what's your name"
-🤖 [esp32-cam-hotpin] LLM response: "My name is Hotpin, nice to meet you!"
-TTS synthesis completed: 97564 bytes generated
-Cleaned up temp file: C:\Users\VIGHNE~1\AppData\Local\Temp\hotpin_tts_fke21c03.wav
-🔊 [esp32-cam-hotpin] Streaming 97564 bytes of audio response...
-✓ [esp32-cam-hotpin] Response streaming complete
-🔄 [esp32-cam-hotpin] Buffer reset, ready for next input
-⏱️ [esp32-cam-hotpin] Connection idle timeout - closing
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005, reason=)
 ✓ Cleared context for session: esp32-cam-hotpin
 🧹 [esp32-cam-hotpin] Session cleaned up
 INFO:     connection closed
-📷 [hotpin-998C64-82] Image received: image.jpg, 8861 bytes (8.65 KB)
-🖼️ [hotpin-998C64-82] Image stored in session context (base64 size: 11816 chars)
-💾 [hotpin-998C64-82] Image saved: captured_images/hotpin-998C64-82_20251104_004849.jpg
-INFO:     10.143.111.214:51131 - "POST /image HTTP/1.1" 200 OK
-INFO:     10.143.111.214:51132 - "WebSocket /ws" [accepted]
+INFO:     10.143.111.214:58028 - "WebSocket /ws" [accepted]
 New WebSocket connection established
 INFO:     connection open
 Session initialized: esp32-cam-hotpin
 ⏱️ [esp32-cam-hotpin] Connection idle timeout - closing
+🧹 [esp32-cam-hotpin] Session cleaned up
+INFO:     connection closed
+INFO:     10.143.111.214:58029 - "WebSocket /ws" [accepted]
+New WebSocket connection established
+INFO:     connection open
+Session initialized: esp32-cam-hotpin
+🔌 [esp32-cam-hotpin] WebSocket disconnect received (code=1005, reason=)
 🧹 [esp32-cam-hotpin] Session cleaned up
 INFO:     connection closed

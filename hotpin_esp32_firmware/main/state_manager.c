@@ -43,6 +43,7 @@ static bool s_capture_in_progress = false;
 static bool s_tts_playback_active = false;
 static bool s_transition_scheduled = false;
 static bool s_stt_stopped_awaiting_transcription = false;  // ✅ FIX: Track EOS → transcription gap
+static bool s_user_requested_stop = false;  // ✅ FIX: Track user's request to end voice session
 
 // Safe watchdog reset function to prevent errors when task is not registered
 // ✅ IMPROVED: Suppress common benign errors (ESP_ERR_NOT_FOUND, ESP_ERR_INVALID_ARG)
@@ -325,11 +326,15 @@ static bool guardrails_should_block_button(button_event_type_t type) {
             return true;
         }
         
-        // If no audio is streaming but pipeline is busy, allow cancellation with warning
+        // ✅ FIX: Remove "soft override" - user cancellation is now handled by event-driven logic
+        // The button handler will stop STT and wait for TTS_PLAYBACK_FINISHED event
+        // Do NOT allow transition here - it will cause I2S deinitialization race condition
         if (guardrails_is_pipeline_busy()) {
             if (type == BUTTON_EVENT_SINGLE_CLICK) {
-                // Allow single click to stop voice pipeline (user cancellation)
-                ESP_LOGW(TAG, "Guardrail soft override: stopping voice pipeline (user cancellation)");
+                // Button press is allowed to stop STT, but transition is deferred
+                ESP_LOGI(TAG, "User cancellation request accepted - STT will stop, awaiting server response");
+                // Let the button handler deal with it (it won't transition immediately)
+                // Do NOT block here - we want the button press to reach the handler
             } else if (type == BUTTON_EVENT_DOUBLE_CLICK) {
                 // Block double click during voice pipeline activity
                 guardrails_signal_block("audio pipeline busy - blocking capture");
@@ -436,40 +441,25 @@ static void process_button_event(const button_event_payload_t *button_event)
                 }
 
             } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-                ESP_LOGI(TAG, "Switching: Voice → Camera (count: %u)",
+                // ✅ FIX: User requested to end voice session - wait for server response
+                // Don't immediately transition to camera mode. The server may be processing
+                // audio and about to send TTS response. Wait for TTS_PLAYBACK_FINISHED event.
+                ESP_LOGI(TAG, "User requested to end voice session (count: %u). Stopping STT and awaiting server response.",
                          (unsigned int)s_mode_switch_count);
                 
-                // Prevent button events during transitions to avoid conflicts
-                if (s_transition_in_progress) {
-                    ESP_LOGW(TAG, "Voice to camera transition ignored - system already transitioning");
-                    return;
-                }
+                // Set flag indicating we're waiting for pipeline to finish
+                s_user_requested_stop = true;
                 
-                previous_state = current_state;
-                current_state = SYSTEM_STATE_TRANSITIONING;
-                s_transition_in_progress = true;
-
-                // Ensure all previous operations are completed before starting transition
-                vTaskDelay(pdMS_TO_TICKS(50));
+                // Stop STT pipeline, which sends EOS signal to server
+                stt_pipeline_stop();
                 
-                esp_err_t cam_ret = transition_to_camera_mode();
-                s_transition_in_progress = false;
-
-                if (cam_ret == ESP_OK) {
-                    current_state = SYSTEM_STATE_CAMERA_STANDBY;
-                    ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state");
-                    // Reset transition scheduled flag since transition completed
-                    s_transition_scheduled = false;
-                } else {
-                    ESP_LOGE(TAG, "❌ Camera mode transition failed");
-                    current_state = SYSTEM_STATE_ERROR;
-                    // Reset transition scheduled flag since transition failed
-                    s_transition_scheduled = false;
-                    esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
-                    if (beep_ret != ESP_OK) {
-                        ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
-                    }
-                }
+                // Update LED to show we're processing
+                led_controller_set_state(LED_STATE_PULSING);
+                
+                // CRITICAL: Do NOT change system state here. Stay in VOICE_ACTIVE.
+                // The transition will be triggered by handle_tts_playback_finished() event.
+                ESP_LOGI(TAG, "Remaining in VOICE_ACTIVE state until server response completes.");
+                
             } else {
                 ESP_LOGW(TAG, "Single click received in state %s - no action",
                          state_to_string(current_state));
@@ -521,73 +511,48 @@ static void execute_capture_sequence(void)
 
 static void process_websocket_status(websocket_status_t status)
 {
+    // ✅ STABILITY FIX: State manager now only REACTS to connection status
+    // It does NOT try to fix the connection or force state transitions
+    // Reconnection is handled solely by websocket_connection_task in main.c
+    
     switch (status) {
         case WEBSOCKET_STATUS_CONNECTED:
-            ESP_LOGI(TAG, "WebSocket connected");
+            ESP_LOGI(TAG, "✅ WebSocket connected");
             if (current_state == SYSTEM_STATE_CAMERA_STANDBY) {
                 led_controller_set_state(LED_STATE_BREATHING);
+            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                // Restore appropriate LED state for voice mode
+                led_controller_set_state(LED_STATE_SOLID);
             }
             break;
+            
         case WEBSOCKET_STATUS_DISCONNECTED:
-            ESP_LOGW(TAG, "WebSocket disconnected");
+            ESP_LOGW(TAG, "⚠️ WebSocket disconnected - visual feedback only, staying in current state");
+            // ✅ KEY CHANGE: Only provide visual feedback, don't force transition
+            // The websocket_connection_task will automatically reconnect
+            // User can manually press button to exit voice mode if needed
             led_controller_set_state(LED_STATE_PULSING);
             
-            // CRITICAL FIX: Handle disconnection better in voice mode
-            // Prevent transitions during active transitions to avoid conflicts
-            if (current_state == SYSTEM_STATE_VOICE_ACTIVE && !s_transition_in_progress) {
-                // Only schedule transition if one isn't already scheduled to prevent multiple transitions
-                if (!s_transition_scheduled) {
-                    s_transition_scheduled = true;
-                    ESP_LOGW(TAG, "WebSocket disconnected while in voice mode - triggering transition to camera");
-                    // Schedule a transition to camera mode to prevent hanging
-                    system_event_t evt = {
-                        .type = SYSTEM_EVENT_WEBSOCKET_STATUS,
-                        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
-                        .data.websocket = {
-                            .status = WEBSOCKET_STATUS_DISCONNECTED,
-                        }
-                    };
-                    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(100))) {
-                        ESP_LOGE(TAG, "Failed to enqueue WebSocket disconnect event for voice mode");
-                        s_transition_scheduled = false; // Reset the flag if posting failed
-                    }
-                } else {
-                    ESP_LOGD(TAG, "WebSocket disconnect transition already scheduled, skipping");
-                }
-            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE && s_transition_in_progress) {
-                ESP_LOGW(TAG, "WebSocket disconnect ignored - system transitioning");
+            // Log the current state for debugging but don't change it
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                ESP_LOGI(TAG, "📱 Staying in VOICE_ACTIVE - audio drivers remain initialized");
+                ESP_LOGI(TAG, "💡 Press button to exit voice mode, or wait for automatic reconnection");
             }
             break;
-        case WEBSOCKET_STATUS_ERROR:
-            ESP_LOGE(TAG, "WebSocket error signalled");
-            led_controller_set_state(LED_STATE_SOS);
             
-            // CRITICAL FIX: Handle error better in voice mode
-            // Prevent transitions during active transitions to avoid conflicts
-            if (current_state == SYSTEM_STATE_VOICE_ACTIVE && !s_transition_in_progress) {
-                // Only schedule transition if one isn't already scheduled to prevent multiple transitions
-                if (!s_transition_scheduled) {
-                    s_transition_scheduled = true;
-                    ESP_LOGE(TAG, "WebSocket error occurred while in voice mode - triggering transition to camera");
-                    // Schedule a transition to camera mode to prevent hanging
-                    system_event_t evt = {
-                        .type = SYSTEM_EVENT_WEBSOCKET_STATUS,
-                        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
-                        .data.websocket = {
-                            .status = WEBSOCKET_STATUS_ERROR,
-                        }
-                    };
-                    if (!event_dispatcher_post(&evt, pdMS_TO_TICKS(100))) {
-                        ESP_LOGE(TAG, "Failed to enqueue WebSocket error event for voice mode");
-                        s_transition_scheduled = false; // Reset the flag if posting failed
-                    }
-                } else {
-                    ESP_LOGD(TAG, "WebSocket error transition already scheduled, skipping");
-                }
-            } else if (current_state == SYSTEM_STATE_VOICE_ACTIVE && s_transition_in_progress) {
-                ESP_LOGW(TAG, "WebSocket error ignored - system transitioning");
+        case WEBSOCKET_STATUS_ERROR:
+            ESP_LOGE(TAG, "❌ WebSocket error - visual feedback only, staying in current state");
+            // ✅ KEY CHANGE: Only provide visual feedback, don't force transition
+            // The websocket_connection_task will handle reconnection
+            led_controller_set_state(LED_STATE_PULSING);  // Use pulsing instead of SOS for transient errors
+            
+            // Log the current state for debugging but don't change it
+            if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+                ESP_LOGI(TAG, "📱 Staying in VOICE_ACTIVE - audio drivers remain initialized");
+                ESP_LOGI(TAG, "💡 Press button to exit voice mode, or wait for automatic reconnection");
             }
             break;
+            
         default:
             break;
     }
@@ -681,8 +646,39 @@ static void handle_tts_playback_finished(esp_err_t result)
 
     s_tts_playback_active = false;
 
-    if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
-        led_controller_set_state(LED_STATE_SOLID);
+    // ✅ FIX: Check if user had previously requested to stop the session
+    // If so, now is the safe time to transition back to camera mode
+    if (s_user_requested_stop) {
+        ESP_LOGI(TAG, "Playback finished and user requested stop. Transitioning to Camera Mode now.");
+
+        // Reset the flag
+        s_user_requested_stop = false;
+
+        // Now it is safe to transition - TTS playback is complete
+        previous_state = current_state;
+        current_state = SYSTEM_STATE_TRANSITIONING;
+        s_transition_in_progress = true;
+
+        esp_err_t cam_ret = transition_to_camera_mode();
+        s_transition_in_progress = false;
+
+        if (cam_ret == ESP_OK) {
+            current_state = SYSTEM_STATE_CAMERA_STANDBY;
+            ESP_LOGI(TAG, "✅ Entered CAMERA_STANDBY state after conversation.");
+            led_controller_set_state(LED_STATE_BREATHING);
+        } else {
+            ESP_LOGE(TAG, "❌ Failed to transition to camera mode after conversation.");
+            current_state = SYSTEM_STATE_ERROR;
+            esp_err_t beep_ret = feedback_player_play(FEEDBACK_SOUND_ERROR);
+            if (beep_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to play error feedback: %s", esp_err_to_name(beep_ret));
+            }
+        }
+    } else {
+        // If the user hasn't requested a stop, just update the LED
+        if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+            led_controller_set_state(LED_STATE_SOLID);
+        }
     }
 }
 
@@ -1060,8 +1056,9 @@ static esp_err_t handle_camera_capture(void) {
 static esp_err_t transition_to_voice_mode(void) {
     ESP_LOGI(TAG, "=== TRANSITION TO VOICE MODE ===");
     
-    // ✅ FIX: Initialize flag at start of voice session
+    // ✅ FIX: Initialize flags at start of voice session
     s_stt_stopped_awaiting_transcription = false;
+    s_user_requested_stop = false;
     
     // Log memory state before transition
     memory_manager_log_stats("Before Voice Transition");
@@ -1251,6 +1248,10 @@ static esp_err_t handle_shutdown(void) {
 
 static void handle_error_state(void) {
     ESP_LOGE(TAG, "System in ERROR state (previous: %s)", state_to_string(previous_state));
+    
+    // ✅ FIX: Reset pending transition flags in error state
+    s_user_requested_stop = false;
+    s_stt_stopped_awaiting_transcription = false;
     
     // Attempt recovery based on previous state
     static uint32_t error_count = 0;

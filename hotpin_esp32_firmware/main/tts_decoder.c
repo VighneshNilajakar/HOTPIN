@@ -45,8 +45,9 @@ typedef struct {
 } wav_runtime_info_t;
 
 // Stream buffer for audio data
-// Increased buffer size for better buffering performance
-#define TTS_STREAM_BUFFER_SIZE (192 * 1024)  // Allow full TTS responses to buffer without drops
+// ✅ CRITICAL FIX: Increased buffer size to handle larger TTS responses
+// Server generates responses up to 256KB - previous 192KB buffer was too small
+#define TTS_STREAM_BUFFER_SIZE (327680)      // 320 KB - handles typical responses with safety margin
 #define TTS_STREAM_BUFFER_TRIGGER_LEVEL (16 * 1024)  // Maintain reasonable trigger threshold for streaming
 #define AUDIO_CHUNK_SIZE        4096        // DMA buffer size for I2S playback
 static StreamBufferHandle_t g_audio_stream_buffer = NULL;
@@ -226,9 +227,11 @@ esp_err_t tts_decoder_start(void) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (is_running) {
-        ESP_LOGW(TAG, "TTS decoder already running");
-        return ESP_OK;
+    // ✅ SELF-HEALING: Check for stale state from previous failed shutdown
+    if (g_playback_task_handle != NULL || is_running) {
+        ESP_LOGW(TAG, "TTS decoder appears to be in a stale state. Forcing a stop before starting.");
+        tts_decoder_stop(); // Call the forceful stop function
+        vTaskDelay(pdMS_TO_TICKS(50)); // Allow time for cleanup
     }
 
     // CRITICAL CHECK: Verify I2S driver is initialized before starting playback
@@ -307,17 +310,23 @@ esp_err_t tts_decoder_start(void) {
 esp_err_t tts_decoder_stop(void) {
     ESP_LOGI(TAG, "⏹️ Stopping TTS decoder...");
 
-    if (!is_running) {
-        ESP_LOGW(TAG, "TTS decoder not running");
-        // Still reset state variables to ensure clean state
+    if (!is_running && g_playback_task_handle == NULL) {
+        ESP_LOGW(TAG, "TTS decoder already stopped.");
+        // Still perform full state reset to ensure clean slate
         header_parsed = false;
         playback_feedback_sent = false;
         eos_requested = false;
         playback_completed = false;
         audio_data_received = false;
+        is_session_active = false;
+        session_ended = false;
+        force_stop_requested = false;
         bytes_received = 0;
         pcm_bytes_played = 0;
         header_bytes_received = 0;
+        session_bytes_played = 0;
+        playback_start_time = 0;
+        session_start_time = 0;
         // Clear the stream buffer if it exists
         if (g_audio_stream_buffer != NULL) {
             xStreamBufferReset(g_audio_stream_buffer);
@@ -325,73 +334,67 @@ esp_err_t tts_decoder_stop(void) {
         return ESP_OK;
     }
 
+    // Immediately signal all loops to stop
     is_playing = false;
     is_running = false;
     eos_requested = true;
+    force_stop_requested = true;
 
-    // Send EOS to ensure playback completes properly
-    // Wait for playback task to cleanly terminate with more comprehensive checks
-    const TickType_t wait_step = pdMS_TO_TICKS(10);
-    uint32_t attempts = 0;
-    const uint32_t max_attempts = 1000; // Increased to 10 seconds max wait time
-    
-    // Wait for playback to complete or timeout
-    while (attempts < max_attempts) {
-        if (playback_completed || g_playback_task_handle == NULL) {
-            break;
-        }
-        vTaskDelay(wait_step);
-        attempts++;
+    // ✅ CRITICAL FIX: Unblock the stream buffer BEFORE deleting the task
+    // If the task is blocked in xStreamBufferReceive(), send dummy data to unblock it
+    // This allows the task to see the stop flags and exit cleanly
+    if (g_playback_task_handle != NULL && g_audio_stream_buffer != NULL) {
+        ESP_LOGI(TAG, "Unblocking stream buffer to allow task cleanup...");
+        // Send a zero byte to wake up any blocked receiver
+        uint8_t dummy = 0;
+        xStreamBufferSend(g_audio_stream_buffer, &dummy, 1, 0);
         
-        // Check if stream buffer is empty and playback is truly complete
-        if (g_audio_stream_buffer != NULL && xStreamBufferIsEmpty(g_audio_stream_buffer)) {
-            if (!is_playing && playback_completed) {
-                break;
-            }
-        }
+        // Give the task a brief moment to notice the stop flags and exit cleanly
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    // ✅ FIX #7 (REVISED): If still running after timeout, force delete
-    // DON'T unregister watchdog from outside - let the task unregister itself
-    // Just set handle to NULL to prevent safe_task_wdt_reset() from being called
+    // Forcefully terminate the playback task if it's still running
     if (g_playback_task_handle != NULL) {
-        ESP_LOGW(TAG, "Playback task still running after timeout - force deleting");
-        
-        // Save handle for deletion
+        ESP_LOGW(TAG, "Forcefully deleting active playback task.");
         TaskHandle_t temp_handle = g_playback_task_handle;
-        
-        // ✅ FIX #7: Set handle to NULL FIRST to stop safe_task_wdt_reset() from being called
-        // This prevents "task not found" errors when task is still running but being deleted
-        g_playback_task_handle = NULL;
-        
-        // Delete the task - it will unregister itself from watchdog in its cleanup code
+        g_playback_task_handle = NULL;  // Nullify handle before deletion
         vTaskDelete(temp_handle);
+        
+        // ✅ CRITICAL: Small delay after vTaskDelete to ensure scheduler cleanup
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 
+    // ✅ CRITICAL FIX: Reset stream buffer AFTER task deletion to clear dangling state
+    // This prevents "xTaskWaitingToReceive" assertion failure on next start
+    if (g_audio_stream_buffer != NULL) {
+        ESP_LOGI(TAG, "Resetting audio stream buffer to clear internal state.");
+        xStreamBufferReset(g_audio_stream_buffer);
+    }
+
+    // Restore the default I2S clock rate as a safety measure
     esp_err_t clk_ret = audio_driver_set_tx_sample_rate(CONFIG_AUDIO_SAMPLE_RATE);
     if (clk_ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to restore TX sample rate during stop: %s", esp_err_to_name(clk_ret));
     }
-    
-    // Reset all state variables
+
+    // --- CRITICAL: Full State Reset ---
+    ESP_LOGI(TAG, "Performing full state reset of TTS decoder.");
     header_parsed = false;
     playback_feedback_sent = false;
     eos_requested = false;
     playback_completed = false;
     audio_data_received = false;
+    is_session_active = false;
+    session_ended = false;
+    force_stop_requested = false;
     bytes_received = 0;
     pcm_bytes_played = 0;
     header_bytes_received = 0;
+    session_bytes_played = 0;
+    playback_start_time = 0;
+    session_start_time = 0;
     
-    // Clear the stream buffer to prevent data carryover
-    if (g_audio_stream_buffer != NULL) {
-        xStreamBufferReset(g_audio_stream_buffer);
-    }
-    
-    // CRITICAL FIX: Free stereo scratch buffer after each TTS session to prevent DMA fragmentation
-    // The 8KB scratch buffer was never freed between sessions, causing severe DMA-capable RAM fragmentation
-    // Logs show DMA fragmentation going from 46% → 51% → 63% over multiple sessions
-    // This buffer is only needed during active mono→stereo conversion, not between sessions
+    // Free stereo scratch buffer to prevent DMA fragmentation
     if (s_stereo_scratch != NULL) {
         ESP_LOGI(TAG, "Freeing stereo scratch buffer (%zu bytes) to reduce fragmentation", s_stereo_scratch_size);
         heap_caps_free(s_stereo_scratch);
@@ -399,13 +402,18 @@ esp_err_t tts_decoder_stop(void) {
         s_stereo_scratch_size = 0;
         s_stereo_scratch_capacity_samples = 0;
     }
-    
-    ESP_LOGI(TAG, "⏹️ TTS decoder stopped (played %zu bytes)", pcm_bytes_played);
+    // ------------------------------------
+
+    ESP_LOGI(TAG, "⏹️ TTS decoder stopped and reset.");
     return ESP_OK;
 }
 
 bool tts_decoder_is_playing(void) {
     return is_playing;
+}
+
+bool tts_decoder_is_running(void) {
+    return is_running;
 }
 
 bool tts_decoder_is_receiving_audio(void) {
@@ -450,7 +458,21 @@ static void audio_data_callback(const uint8_t *data, size_t len, void *arg) {
         last_log_count = 0;
     }
     
-    ESP_LOGI(TAG, "Received audio chunk #%u: %zu bytes", (unsigned int)chunk_count, len);
+    // ✅ BUFFER OVERFLOW DETECTION: Check buffer capacity BEFORE accepting data
+    size_t buffer_space = xStreamBufferSpacesAvailable(g_audio_stream_buffer);
+    size_t buffer_used = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+    
+    ESP_LOGI(TAG, "Received audio chunk #%u: %zu bytes (buffer: %zu/%d used, %zu free)", 
+             (unsigned int)chunk_count, len, buffer_used, TTS_STREAM_BUFFER_SIZE, buffer_space);
+    
+    // ✅ CRITICAL: Warn if incoming data exceeds available buffer space
+    if (len > buffer_space) {
+        ESP_LOGW(TAG, "⚠️ BUFFER PRESSURE: Incoming %zu bytes, only %zu bytes free", len, buffer_space);
+        ESP_LOGW(TAG, "   Buffer: %zu/%d bytes used (%.1f%% full)", 
+                 buffer_used, TTS_STREAM_BUFFER_SIZE, 
+                 (buffer_used * 100.0) / TTS_STREAM_BUFFER_SIZE);
+        ESP_LOGW(TAG, "   This may cause delays or data loss if playback is slow");
+    }
     
     // Log first few bytes of EVERY chunk for debugging WAV stream issues
     if (chunk_count <= 5 && len >= 12) {
@@ -608,7 +630,7 @@ static void tts_playback_task(void *pvParameters) {
     while (is_running) {
         // ✅ FIX #8: Check for stop request at top of loop BEFORE blocking on buffer receive
         // This ensures fast response to tts_decoder_stop() even when actively playing
-        if (!is_running) {
+        if (!is_running || force_stop_requested) {
             ESP_LOGI(TAG, "Playback task stop requested - exiting main loop");
             playback_completed = true;
             break;
@@ -619,7 +641,7 @@ static void tts_playback_task(void *pvParameters) {
             g_audio_stream_buffer,
             dma_buffer,
             AUDIO_CHUNK_SIZE,
-            pdMS_TO_TICKS(100) // 100ms timeout
+            pdMS_TO_TICKS(100) // 100ms timeout - short enough to check stop flags frequently
         );
 
         if (bytes_received_from_stream > 0) {
@@ -745,12 +767,30 @@ static void tts_playback_task(void *pvParameters) {
                 } else if (ret == ESP_ERR_INVALID_SIZE) {
                     // Need more data to complete header parsing
                     ESP_LOGD(TAG, "Awaiting more header bytes (%zu collected)", header_bytes_received);
-                } else if (ret == ESP_ERR_INVALID_ARG && header_bytes_received < 44) {
-                    // First chunk might not start with RIFF - keep accumulating until we have at least 44 bytes (standard WAV header)
-                    ESP_LOGD(TAG, "Header incomplete or fragmented, waiting for more data (%zu bytes collected)", header_bytes_received);
+                } else if (ret == ESP_ERR_INVALID_ARG) {
+                    // ✅ STREAMING FIX: Header not found yet - keep accumulating
+                    // In streaming scenarios, the WAV header can arrive in ANY chunk, not just the first
+                    // PCM data might arrive before the header due to network fragmentation
+                    if (header_bytes_received < WAV_HEADER_BUFFER_MAX - AUDIO_CHUNK_SIZE) {
+                        // Still have room in accumulation buffer - keep waiting for header
+                        ESP_LOGD(TAG, "⏳ WAV header not found yet - accumulating data (%zu/%d bytes collected)", 
+                                 header_bytes_received, WAV_HEADER_BUFFER_MAX);
+                        ESP_LOGD(TAG, "   First 4 bytes: 0x%02X 0x%02X 0x%02X 0x%02X (looking for 'RIFF')", 
+                                 header_buffer[0], header_buffer[1], header_buffer[2], header_buffer[3]);
+                    } else {
+                        // Buffer nearly full and still no valid header - this is a fatal error
+                        ESP_LOGE(TAG, "❌ Failed to find WAV header after accumulating %zu bytes", header_bytes_received);
+                        ESP_LOGE(TAG, "   First 4 bytes: 0x%02X 0x%02X 0x%02X 0x%02X", 
+                                 header_buffer[0], header_buffer[1], header_buffer[2], header_buffer[3]);
+                        ESP_LOGE(TAG, "   This suggests the stream is not a valid WAV file");
+                        is_running = false;
+                        playback_result = ret;
+                        break;
+                    }
                 } else {
-                    // Fatal parse error after receiving sufficient data
-                    ESP_LOGE(TAG, "Failed to parse WAV header after %zu bytes: %s", header_bytes_received, esp_err_to_name(ret));
+                    // Other fatal parse error
+                    ESP_LOGE(TAG, "Failed to parse WAV header: %s (bytes collected: %zu)", 
+                             esp_err_to_name(ret), header_bytes_received);
                     is_running = false;
                     playback_result = ret;
                     break;
@@ -799,10 +839,11 @@ static void tts_playback_task(void *pvParameters) {
                 }
             }
         } else {
-            // Timeout occurred - check if we should exit
+            // ✅ STABILITY FIX: Timeout occurred - prevent watchdog starvation during network failures
             uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000);
             
-            // Reset watchdog during idle periods to prevent timeout
+            // CRITICAL: Reset watchdog during idle periods to prevent timeout
+            // This is essential when waiting for audio that may never arrive due to network errors
             safe_task_wdt_reset();
             
             // Check if we've been idle for too long or if shutdown is requested
@@ -811,7 +852,29 @@ static void tts_playback_task(void *pvParameters) {
                 break;
             }
             
-            // Check if we've been idle for too long (more than 20 seconds with no data)
+            // ✅ STABILITY FIX: Shorter timeout during header parsing (5 seconds)
+            // During header parsing, we expect data quickly. If it doesn't arrive, likely a network issue.
+            if (!header_parsed && (current_time - last_activity_timestamp) > 5000) {
+                ESP_LOGW(TAG, "⚠️ No audio data received for 5+ seconds while waiting for header");
+                ESP_LOGW(TAG, "   This suggests a network disconnection. Exiting playback task gracefully.");
+                ESP_LOGW(TAG, "   websocket_connection_task will handle reconnection automatically.");
+                playback_completed = true;
+                playback_result = ESP_ERR_TIMEOUT;
+                break;
+            }
+            
+            // ✅ STABILITY FIX: Medium timeout after header parsed (10 seconds)
+            // Once header is parsed, we expect continuous audio stream. 10s gap = network problem.
+            if (header_parsed && (current_time - last_activity_timestamp) > 10000) {
+                ESP_LOGW(TAG, "⚠️ No audio data received for 10+ seconds after header parsed");
+                ESP_LOGW(TAG, "   This suggests a network disconnection during audio transfer.");
+                ESP_LOGW(TAG, "   Exiting playback task gracefully to prevent watchdog timeout.");
+                playback_completed = true;
+                playback_result = ESP_ERR_TIMEOUT;
+                break;
+            }
+            
+            // Original 20-second timeout for final cleanup checks
             if ((current_time - last_activity_timestamp) > 20000) {
                 ESP_LOGD(TAG, "Playback task idle for 20+ seconds, checking exit conditions...");
                 
@@ -1062,13 +1125,43 @@ static esp_err_t parse_wav_header(const uint8_t *buffer, size_t length, size_t *
         return ESP_ERR_INVALID_SIZE;
     }
 
-    if (memcmp(buffer, "RIFF", 4) != 0) {
-        ESP_LOGE(TAG, "Invalid RIFF chunk - got: 0x%02X 0x%02X 0x%02X 0x%02X", 
+    // ✅ STREAMING FIX: Search for RIFF header within the buffer
+    // In streaming scenarios, PCM data might arrive before the header due to network fragmentation
+    // We need to find where the actual WAV header starts
+    size_t riff_offset = 0;
+    bool riff_found = false;
+    
+    if (memcmp(buffer, "RIFF", 4) == 0) {
+        // Header is at the beginning (normal case)
+        riff_found = true;
+    } else {
+        // Search for RIFF header within the accumulated buffer
+        ESP_LOGD(TAG, "🔍 RIFF not at start, searching within %zu bytes...", length);
+        for (size_t i = 0; i <= length - 4; i++) {
+            if (memcmp(buffer + i, "RIFF", 4) == 0) {
+                riff_offset = i;
+                riff_found = true;
+                ESP_LOGI(TAG, "✅ Found RIFF header at offset %zu (skipped %zu bytes of PCM data)", i, i);
+                break;
+            }
+        }
+    }
+    
+    if (!riff_found) {
+        ESP_LOGD(TAG, "⏳ RIFF header not found in accumulated buffer (%zu bytes) - need more data", length);
+        ESP_LOGD(TAG, "   First 4 bytes: 0x%02X 0x%02X 0x%02X 0x%02X", 
                  buffer[0], buffer[1], buffer[2], buffer[3]);
-        ESP_LOGE(TAG, "Expected: 'R' 'I' 'F' 'F' (0x52 0x49 0x46 0x46)");
-        ESP_LOGE(TAG, "Buffer length: %zu bytes, header_bytes_received: %zu", 
-                 length, header_bytes_received);
         return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Adjust buffer pointer and length to start from RIFF header
+    const uint8_t *original_buffer = buffer;  // Save original pointer for offset calculation
+    buffer = buffer + riff_offset;
+    length = length - riff_offset;
+    
+    if (length < 12) {
+        ESP_LOGD(TAG, "WAV header too short after offset adjustment: %zu bytes (need at least 12)", length);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     if (memcmp(buffer + 8, "WAVE", 4) != 0) {
@@ -1117,7 +1210,9 @@ static esp_err_t parse_wav_header(const uint8_t *buffer, size_t length, size_t *
         } else if (memcmp(chunk_id, "data", 4) == 0) {
             parsed.data_size = chunk_size;
             if (header_consumed != NULL) {
-                *header_consumed = chunk_data_start;
+                // ✅ STREAMING FIX: Account for RIFF offset when calculating header_consumed
+                // If RIFF was found at offset N, we need to skip those N bytes plus the header
+                *header_consumed = riff_offset + chunk_data_start;
             }
             data_found = true;
             break;
