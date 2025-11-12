@@ -64,6 +64,7 @@
 #define CONFIG_CAMERA_PIN_XCLK              GPIO_NUM_0      // 20MHz clock
 #define CONFIG_CAMERA_PIN_SIOD              GPIO_NUM_26     // I2C data (SCCB)
 #define CONFIG_CAMERA_PIN_SIOC              GPIO_NUM_27     // I2C clock (SCCB)
+#define CONFIG_CAMERA_FLASH_GPIO            GPIO_NUM_4      // Camera flash LED
 
 // Camera parallel data bus D0-D7
 #define CONFIG_CAMERA_PIN_D0                GPIO_NUM_5

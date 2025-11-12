@@ -378,9 +378,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     signal_data = {"signal": "EOS"}
                     message = {"text": json.dumps(signal_data)}
                 else:
-                    print(f"⏱️ [{session_id}] Connection idle timeout - closing")
-                    await websocket.close(code=1000, reason="Idle timeout")
-                    break
+                    # ✅ CRITICAL FIX: Don't close connection or clear image context on idle timeout
+                    # The device may have captured an image and is waiting for user to speak
+                    # Keep connection alive and preserve image context for multimodal queries
+                    if session_id in SESSION_IMAGES:
+                        print(f"⏱️ [{session_id}] Connection idle but image context present - keeping alive")
+                        # Keep waiting for voice input
+                        continue
+                    else:
+                        print(f"⏱️ [{session_id}] Connection idle timeout - closing")
+                        await websocket.close(code=1000, reason="Idle timeout")
+                        break
 
             message_type = message.get("type")
             if message_type == "websocket.disconnect":
@@ -393,8 +401,15 @@ async def websocket_endpoint(websocket: WebSocket):
             if "bytes" in message:
                 audio_chunk = message["bytes"]
                 
-                # Append to session buffer
-                SESSION_AUDIO_BUFFERS[session_id].write(audio_chunk)
+                # Append to session buffer (with safe access in case of race condition)
+                buffer = SESSION_AUDIO_BUFFERS.get(session_id)
+                if buffer is None:
+                    print(f"⚠️ [{session_id}] Session buffer not found - possible race condition, reinitializing")
+                    SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+                    SESSION_AUDIO_STATS[session_id] = {"chunks": 0, "bytes": 0}
+                    buffer = SESSION_AUDIO_BUFFERS[session_id]
+                
+                buffer.write(audio_chunk)
                 stats = SESSION_AUDIO_STATS.get(session_id)
                 if stats is not None:
                     stats["chunks"] += 1
@@ -432,10 +447,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             print(f"   Connection state: {websocket.client_state}")
                             break
                 
-                # Optional: Send progress indicator
-                buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()
-                if buffer_size % 32000 == 0:  # Every ~1 second at 16kHz
-                    print(f"📊 [{session_id}] Buffer: {buffer_size} bytes (~{buffer_size/32000:.1f}s)")
+                # Optional: Send progress indicator (defensive check for race conditions)
+                if session_id in SESSION_AUDIO_BUFFERS:
+                    buffer_size = SESSION_AUDIO_BUFFERS[session_id].tell()
+                    if buffer_size % 32000 == 0:  # Every ~1 second at 16kHz
+                        print(f"📊 [{session_id}] Buffer: {buffer_size} bytes (~{buffer_size/32000:.1f}s)")
             
             # Handle text signals (EOS, commands, etc.)
             elif "text" in message:
@@ -445,7 +461,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 if signal_type == "EOS":
                     print(f"🎤 [{session_id}] End-of-speech signal received")
                     
-                    # Extract buffered PCM audio
+                    # Extract buffered PCM audio (with defensive check for race conditions)
+                    if session_id not in SESSION_AUDIO_BUFFERS:
+                        print(f"⚠️ [{session_id}] Audio buffer not found (race condition), reinitializing")
+                        SESSION_AUDIO_BUFFERS[session_id] = io.BytesIO()
+                        SESSION_AUDIO_STATS[session_id] = {"chunks": 0, "bytes": 0}
+                    
                     pcm_data = SESSION_AUDIO_BUFFERS[session_id].getvalue()
                     
                     if len(pcm_data) == 0:
@@ -493,7 +514,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Check for stored image context
                         image_context = SESSION_IMAGES.get(session_id)
                         if image_context:
-                            print(f"🖼️ [{session_id}] Using stored image context for LLM request")
+                            print(f"🖼️ [{session_id}] Using stored image context for LLM request (base64 length: {len(image_context)})")
+                        else:
+                            print(f"ℹ️ [{session_id}] No image context found for this session")
+                            print(f"   Available sessions with images: {list(SESSION_IMAGES.keys())}")
                         
                         # Send transcript to client (optional feedback)
                         if websocket.client_state.value == 1:
@@ -520,53 +544,74 @@ async def websocket_endpoint(websocket: WebSocket):
                             print(f"⚠ [{session_id}] Empty LLM response, using fallback message")
                             llm_response = "I'm sorry, I couldn't generate a response. Please try again."
                         
-                        # Split the response into sentences
-                        sentences = nltk.sent_tokenize(llm_response)
-
-                        for sentence in sentences:
-                            if not sentence.strip():
-                                continue
-
-                            # Send LLM response text (optional feedback)
-                            if websocket.client_state.value == 1:
-                                await websocket.send_text(json.dumps({
-                                    "status": "processing",
-                                    "stage": "tts",
-                                    "response": sentence
-                                }))
-                                await asyncio.sleep(0.01)
-                            else:
-                                print(f"⚠ [{session_id}] WebSocket disconnected during LLM response")
-                                break
-                            
-                            # Step 4: TTS - Synthesize audio (blocking, run in thread pool)
-                            wav_bytes = await asyncio.to_thread(
-                                synthesize_response_audio,
-                                sentence
-                            )
-                            
-                            print(f"🔊 [{session_id}] Streaming {len(wav_bytes)} bytes of audio response...")
-                            
-                            # Step 5: Stream audio response in chunks (async)
-                            chunk_size = 4096  # 4KB chunks
-                            for i in range(0, len(wav_bytes), chunk_size):
-                                # Check connection before each chunk
-                                if websocket.client_state.value != 1:
-                                    print(f"⚠ [{session_id}] WebSocket disconnected during audio streaming")
-                                    break
-                                chunk = wav_bytes[i:i + chunk_size]
-                                await websocket.send_bytes(chunk)
-                                # Small delay between chunks to prevent overwhelming client
-                                await asyncio.sleep(0.005)  # 5ms between audio chunks
-                        
-                        # Send completion signal (check connection first)
+                        # Send LLM response text (optional feedback)
                         if websocket.client_state.value == 1:
                             await websocket.send_text(json.dumps({
-                                "status": "complete"
+                                "status": "processing",
+                                "stage": "tts",
+                                "response": llm_response
                             }))
                             await asyncio.sleep(0.01)
+                        else:
+                            print(f"⚠ [{session_id}] WebSocket disconnected during LLM response")
+                            # Continue to cleanup section
                         
-                        print(f"✓ [{session_id}] Response streaming complete")
+                        # Step 4: TTS - Synthesize COMPLETE audio in ONE WAV file
+                        # CRITICAL FIX: Generate one continuous WAV instead of multiple WAV files per sentence
+                        # The ESP32 TTS decoder expects a single WAV header followed by PCM data,
+                        # not multiple concatenated WAV files (which would have multiple headers)
+                        print(f"🔊 [{session_id}] Synthesizing complete audio response...")
+                        wav_bytes = await asyncio.to_thread(
+                            synthesize_response_audio,
+                            llm_response  # Send FULL response, not sentence-by-sentence
+                        )
+                        
+                        print(f"🔊 [{session_id}] Streaming {len(wav_bytes)} bytes of audio response...")
+                        
+                        # Step 5: Stream audio response in chunks (async)
+                        chunk_size = 4096  # 4KB chunks
+                        total_chunks = 0
+                        for i in range(0, len(wav_bytes), chunk_size):
+                            # Check connection before each chunk
+                            if websocket.client_state.value != 1:
+                                print(f"⚠ [{session_id}] WebSocket disconnected during audio streaming")
+                                break
+                            chunk = wav_bytes[i:i + chunk_size]
+                            await websocket.send_bytes(chunk)
+                            total_chunks += 1
+                            # Small delay between chunks to prevent overwhelming client
+                            await asyncio.sleep(0.005)  # 5ms between audio chunks
+                        
+                        print(f"✓ [{session_id}] Streamed {total_chunks} audio chunks ({len(wav_bytes)} bytes)")
+                        
+                        # CRITICAL FIX: Wait for all audio chunks to be buffered on client side
+                        # before sending completion signal. This prevents race condition where
+                        # "complete" message arrives before all audio bytes are received.
+                        await asyncio.sleep(0.2)  # 200ms buffer time for network/processing
+                        
+                        # Send end-of-audio marker and completion signal
+                        # Wrap in try-except to handle client disconnection gracefully
+                        try:
+                            # Send end-of-audio marker (zero-length binary frame)
+                            # This gives ESP32 an explicit signal that audio streaming is complete
+                            if websocket.client_state.value == 1:
+                                await websocket.send_bytes(b"")  # Zero-length binary frame as EOS marker
+                                await asyncio.sleep(0.01)
+                                print(f"✓ [{session_id}] End-of-audio marker sent (zero-length frame)")
+                            
+                            # Send completion signal (check connection first)
+                            if websocket.client_state.value == 1:
+                                await websocket.send_text(json.dumps({
+                                    "status": "complete"
+                                }))
+                                await asyncio.sleep(0.01)
+                                print(f"✓ [{session_id}] Completion signal sent")
+                            
+                            print(f"✓ [{session_id}] Response streaming complete")
+                        except Exception as send_error:
+                            # Client may have disconnected during audio playback - this is normal
+                            print(f"⚠ [{session_id}] Could not send completion signals: {send_error}")
+                            print(f"   Client likely disconnected during playback - not an error")
                     
                     except Exception as processing_error:
                         import traceback
@@ -620,9 +665,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 del SESSION_AUDIO_BUFFERS[session_id]
             if session_id in SESSION_AUDIO_STATS:
                 del SESSION_AUDIO_STATS[session_id]
+            
+            # ✅ CRITICAL FIX: Don't clear image context on disconnect
+            # ESP32 may disconnect/reconnect between image capture and voice query
+            # Image context should persist across reconnections for same session_id
+            # Images will be cleared after use in LLM processing or after extended timeout
             if session_id in SESSION_IMAGES:
-                del SESSION_IMAGES[session_id]
-                print(f"🗑️ [{session_id}] Cleared stored image context")
+                print(f"� [{session_id}] Image context preserved for reconnection")
+                # Optional: Start a timer to clear stale images after 5 minutes
+                # For now, images cleared after use in LLM processing
+            
             clear_session_context(session_id)
             print(f"🧹 [{session_id}] Session cleaned up")
 
@@ -634,9 +686,14 @@ if __name__ == "__main__":
     # For production: use multiple workers
     # Command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
     
+    # 🔧 CRITICAL FIX: Configure Uvicorn with aggressive WebSocket keepalive and timeouts
+    # These settings prevent premature connection closure during audio streaming
     uvicorn.run(
         app,
         host=SERVER_HOST,
         port=SERVER_PORT,
-        log_level="info"
+        log_level="info",
+        ws_ping_interval=20,        # Send WebSocket ping every 20 seconds to keep connection alive
+        ws_ping_timeout=60,          # Wait 60 seconds for pong response before closing connection
+        timeout_keep_alive=120       # Keep HTTP connection alive for 120 seconds (affects WebSocket upgrade)
     )

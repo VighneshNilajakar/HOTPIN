@@ -135,13 +135,13 @@ esp_err_t websocket_client_init(const char *uri, const char *auth_token) {
         .headers = (auth_token != NULL && strlen(auth_token) > 0) ? headers : NULL,
         .reconnect_timeout_ms = CONFIG_WEBSOCKET_RECONNECT_DELAY_MS,
         .network_timeout_ms = CONFIG_WEBSOCKET_TIMEOUT_MS,
-        .buffer_size = 32768,  // CRITICAL: Increased to 32KB to handle sustained audio streaming (4x increase)
+        .buffer_size = 65536,  // 🔧 INCREASED: 64KB buffer to prevent overflow during burst transmission (was 32KB)
         .task_stack = 8192,   // Increased stack for callbacks
         .task_prio = TASK_PRIORITY_WEBSOCKET,
         .disable_auto_reconnect = true,   // Use manual reconnection logic to avoid double-start races
         .keep_alive_enable = true,         // Enable TCP keepalive
-        .keep_alive_idle = 45,             // Keep-alive idle time in seconds (45s)
-        .keep_alive_interval = 15,         // Keep-alive interval in seconds (15s)
+        .keep_alive_idle = 10,             // 🔧 TUNED: More aggressive keepalive - 10s idle (was 45s) prevents router/FW closure
+        .keep_alive_interval = 5,          // 🔧 TUNED: Faster keepalive probes - 5s interval (was 15s) detects failures quickly
         .ping_interval_sec = 10,           // CRITICAL: Send WebSocket ping every 10s to keep connection alive
         .cert_pem = NULL,                 // No certificate validation for now
         .transport = WEBSOCKET_TRANSPORT_OVER_TCP, // Explicit TCP transport
@@ -971,33 +971,34 @@ static bool s_session_ended = false; // Track if current session has ended
 
 // Missing handle_binary_message function implementation
 static void handle_binary_message(const uint8_t *data, size_t len) {
-    // CRITICAL FIX: Handle NULL data properly for end-of-session signaling
-    if (data == NULL) {
-        if (len == 0) {
-            ESP_LOGI(TAG, "Received end-of-session signal (NULL data, zero length)");
-            // This is a special case for signaling end of session
-            // Call audio callback with NULL data to signal end of session
-            if (g_audio_callback) {
-                g_audio_callback(NULL, 0, g_audio_callback_arg);
-            }
-            
-            // Also notify TTS decoder about end of stream using proper API
-            tts_decoder_notify_end_of_stream();
-            
-            // Reset session tracking
-            s_current_session_active = false;
-            s_session_ended = true;
-            s_current_session_bytes = 0;
-            s_session_message_count = 0;
-            return;
-        } else {
-            ESP_LOGE(TAG, "Invalid binary message: NULL data with non-zero length (%zu)", len);
-            return;
+    // CRITICAL FIX: Handle zero-length binary frames as end-of-stream signal
+    // Server sends zero-length binary frame after all audio chunks to signal completion
+    if (len == 0) {
+        ESP_LOGI(TAG, "✅ Received end-of-audio signal (zero-length binary frame)");
+        
+        // Notify TTS decoder about end of stream
+        tts_decoder_notify_end_of_stream();
+        
+        // Call audio callback with NULL data to signal end of session
+        if (g_audio_callback) {
+            g_audio_callback(NULL, 0, g_audio_callback_arg);
         }
+        
+        // Reset session tracking
+        s_current_session_active = false;
+        s_session_ended = true;
+        
+        ESP_LOGI(TAG, "🎵 Audio session complete: %u bytes in %u messages", 
+                 (unsigned int)s_current_session_bytes, (unsigned int)s_session_message_count);
+        
+        s_current_session_bytes = 0;
+        s_session_message_count = 0;
+        return;
     }
     
-    if (len == 0) {
-        ESP_LOGW(TAG, "Received zero-length binary message - ignoring");
+    // CRITICAL FIX: Handle NULL data pointer (rare edge case)
+    if (data == NULL) {
+        ESP_LOGE(TAG, "Invalid binary message: NULL data pointer with non-zero length (%zu)", len);
         return;
     }
     

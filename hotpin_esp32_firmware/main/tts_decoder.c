@@ -949,6 +949,21 @@ static void tts_playback_task(void *pvParameters) {
     ESP_LOGI(TAG, "🎵 TTS playback task exiting (played %zu bytes, result: %s)", 
              pcm_bytes_played, esp_err_to_name(playback_result));
     
+    // ✅ CRITICAL FIX: Dispatch TTS_PLAYBACK_FINISHED event BEFORE cleanup
+    // This allows the state manager to know playback is complete and transition states if needed
+    system_event_t completion_evt = {
+        .type = SYSTEM_EVENT_TTS_PLAYBACK_FINISHED,
+        .timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL),
+        .data.tts = {
+            .result = playback_result
+        }
+    };
+    if (!event_dispatcher_post(&completion_evt, pdMS_TO_TICKS(100))) {
+        ESP_LOGW(TAG, "Failed to enqueue TTS playback finished event");
+    } else {
+        ESP_LOGI(TAG, "✅ TTS playback finished event dispatched to state manager");
+    }
+    
     // Play completion feedback if playback was successful (played significant audio)
     // This signals to user that response is complete and they can provide next input
     if (playback_result == ESP_OK && pcm_bytes_played > 10000) {  // > 10KB indicates real content played
@@ -1605,54 +1620,32 @@ void tts_decoder_notify_end_of_stream(void) {
     ESP_LOGI(TAG, "TTS end-of-stream signaled (bytes_received=%zu, header_parsed=%d)", 
              (unsigned int)bytes_received, (int)header_parsed);
     
-    // Reset session-specific state for the next audio session
-    header_parsed = false;
-    header_bytes_received = 0;
-    bytes_received = 0;
-    pcm_bytes_played = 0;
-    playback_feedback_sent = false;
-    playback_completed = false;
+    // ✅ CRITICAL FIX: Do NOT reset header_parsed here!
+    // The playback task needs to continue playing remaining PCM data with the current WAV header.
+    // Resetting header_parsed would cause the task to re-enter WAV header parsing mode
+    // and fail when it encounters PCM audio data instead of a RIFF header.
+    // These session-specific variables will be reset when the playback task exits naturally.
+    
+    // DO NOT reset these while playback is ongoing:
+    // - header_parsed (needed to continue PCM playback)
+    // - header_bytes_received (needed for state tracking)
+    // - wav_info (needed for sample rate/channel info during playback)
+    
+    // These can be safely reset as they don't affect current playback:
+    audio_data_received = false;
     is_session_active = false;
     session_start_time = 0;
     force_stop_requested = false;
-    memset(&wav_info, 0, sizeof(wav_info));
     
-    // More aggressive flushing if we have accumulated data
+    // ✅ CRITICAL FIX: Do NOT flush or drain the stream buffer here!
+    // The playback task needs to continue playing the buffered PCM data.
+    // Draining the buffer would discard audio that should be played.
+    // The playback task will naturally exit after playing all buffered audio.
+    
     if (g_audio_stream_buffer != NULL) {
         size_t buffer_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
         if (buffer_level > 0) {
-            ESP_LOGI(TAG, "Flushing %zu bytes from stream buffer", (unsigned int)buffer_level);
-            
-            // Give the playback task a chance to process the data first
-            vTaskDelay(pdMS_TO_TICKS(100)); // Increased from 50ms to 100ms
-            
-            // If still not processed, force drain
-            buffer_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
-            if (buffer_level > 0) {
-                ESP_LOGI(TAG, "Force draining %zu bytes from stream buffer", (unsigned int)buffer_level);
-                uint8_t dummy_buffer[1024];
-                size_t bytes_drained = 0;
-                uint32_t drain_attempts = 0;
-                const uint32_t max_drain_attempts = 100; // Increased from 50 to 100 * 10ms = 1000ms max
-                
-                while (xStreamBufferBytesAvailable(g_audio_stream_buffer) > 0 && drain_attempts < max_drain_attempts) {
-                    size_t chunk = xStreamBufferReceive(g_audio_stream_buffer, 
-                                                       dummy_buffer, 
-                                                       sizeof(dummy_buffer), 
-                                                       pdMS_TO_TICKS(10));
-                    if (chunk > 0) {
-                        bytes_drained += chunk;
-                    } else {
-                        drain_attempts++;
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                    safe_task_wdt_reset(); // Reset watchdog during draining
-                }
-                ESP_LOGI(TAG, "Flushed %zu bytes from stream buffer (attempts: %u)", 
-                         (unsigned int)bytes_drained, (unsigned int)drain_attempts);
-            }
-        } else {
-            ESP_LOGD(TAG, "Stream buffer empty - no flush needed");
+            ESP_LOGI(TAG, "🎵 Playback task will drain %zu bytes of buffered audio", (unsigned int)buffer_level);
         }
     }
     
@@ -1662,9 +1655,31 @@ void tts_decoder_notify_end_of_stream(void) {
         xTaskNotifyGive(g_playback_task_handle);
     }
     
-    // Wait for playback to complete before returning with better timeout handling
+    // ✅ CRITICAL FIX: Calculate timeout based on buffered audio duration
+    // At 16kHz mono 16-bit: 32000 bytes/second (16000 samples * 2 bytes)
+    // Add 2 seconds safety margin for I2S DMA latency and processing overhead
+    size_t buffer_level = 0;
+    if (g_audio_stream_buffer != NULL) {
+        buffer_level = xStreamBufferBytesAvailable(g_audio_stream_buffer);
+    }
+    
+    // Calculate playback duration: bytes ÷ (sample_rate * bytes_per_sample) + safety_margin
+    uint32_t playback_duration_ms = (buffer_level * 1000) / 32000;  // milliseconds needed to play buffer
+    uint32_t timeout_ms = playback_duration_ms + 2000;  // Add 2 second safety margin
+    
+    // Enforce minimum 3-second timeout and maximum 15-second timeout
+    if (timeout_ms < 3000) {
+        timeout_ms = 3000;  // Minimum 3 seconds for short responses
+    } else if (timeout_ms > 15000) {
+        timeout_ms = 15000;  // Maximum 15 seconds for very long responses
+    }
+    
+    ESP_LOGI(TAG, "Waiting for playback completion: %zu bytes buffered, calculated timeout: %"PRIu32" ms", 
+             buffer_level, timeout_ms);
+    
+    // Wait for playback to complete with dynamically calculated timeout
     const TickType_t wait_start = xTaskGetTickCount();
-    const TickType_t wait_timeout = pdMS_TO_TICKS(1000); // Increased from 500ms to 1000ms timeout
+    const TickType_t wait_timeout = pdMS_TO_TICKS(timeout_ms);
     
     while ((xTaskGetTickCount() - wait_start) < wait_timeout) {
         if (playback_completed || !is_playing) {
@@ -1675,7 +1690,9 @@ void tts_decoder_notify_end_of_stream(void) {
     }
     
     if (!playback_completed && is_playing) {
-        ESP_LOGW(TAG, "TTS playback did not complete within timeout - forcing completion");
+        ESP_LOGW(TAG, "TTS playback did not complete within %"PRIu32" ms timeout - forcing completion", timeout_ms);
+        ESP_LOGW(TAG, "  Buffer had %zu bytes, expected ~%"PRIu32" ms playback time", 
+                 buffer_level, playback_duration_ms);
         // Try to stop the decoder gracefully
         esp_err_t stop_ret = tts_decoder_stop();
         if (stop_ret != ESP_OK) {

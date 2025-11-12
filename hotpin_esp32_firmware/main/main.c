@@ -400,6 +400,13 @@ static esp_err_t init_wifi(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     
+    // 🔧 CRITICAL FIX: Disable WiFi power saving to prevent connection drops during streaming
+    // Modem sleep (type 1) causes packet loss and connection instability during high-throughput audio streaming
+    // Trade-off: ~20-30mA higher power consumption but stable WebSocket connections
+    ESP_LOGI(TAG, "Disabling WiFi power save mode for stable streaming...");
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_LOGI(TAG, "✅ WiFi power save disabled - maximum throughput and stability");
+    
     ESP_LOGI(TAG, "WiFi initialization complete, connecting to %s...", WIFI_SSID);
     
     return ESP_OK;

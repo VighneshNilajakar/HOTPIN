@@ -675,9 +675,15 @@ static void handle_tts_playback_finished(esp_err_t result)
             }
         }
     } else {
-        // If the user hasn't requested a stop, just update the LED
+        // ✅ CRITICAL FIX: Set LED to breathing pattern to signal device is ready for next input
+        // After TTS playback completes, the device should return to idle/ready state
+        // This visual feedback tells the user they can now provide new input
         if (current_state == SYSTEM_STATE_VOICE_ACTIVE) {
+            ESP_LOGI(TAG, "✅ TTS playback complete - device ready for next input");
             led_controller_set_state(LED_STATE_SOLID);
+            
+            // Small delay to ensure LED state is visible before accepting new input
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
@@ -958,8 +964,11 @@ static esp_err_t capture_and_upload_image(void) {
 
     ESP_LOGI(TAG, "Frame captured: %zu bytes", fb->len);
 
-    char session_id[64];
-    json_protocol_generate_session_id(session_id, sizeof(session_id));
+    // CRITICAL FIX: Use the same session ID as WebSocket connection to ensure
+    // image context is available when processing audio queries.
+    // Previously used json_protocol_generate_session_id() which created a different
+    // session ID, causing image context mismatch.
+    const char *session_id = CONFIG_WEBSOCKET_SESSION_ID;
 
     ESP_LOGI(TAG, "Uploading image using session %s", session_id);
     char response[512];
@@ -1158,7 +1167,7 @@ static esp_err_t transition_to_voice_mode(void) {
     
     // Step 6: Start STT and TTS pipelines with additional error handling
     ESP_LOGI(TAG, "╔══════════════════════════════════════════════════");
-    ESP_LOGI(TAG, "║ STEP 6: Starting STT/TTS pipelines");
+    ESP_LOGI(TAG, "║ STEP 6: Starting STT pipeline (TTS will start when server begins responding)");
     ESP_LOGI(TAG, "╚══════════════════════════════════════════════════");
 
     // Ensure clean state for the TTS decoder before starting
@@ -1172,13 +1181,11 @@ static esp_err_t transition_to_voice_mode(void) {
         ESP_LOGE(TAG, "Failed to start STT pipeline: %s", esp_err_to_name(ret));
     }
 
-    // Brief stagger prevents simultaneous startup logs from contending on UART
-    vTaskDelay(pdMS_TO_TICKS(50));
-    
-    ret = tts_decoder_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start TTS decoder: %s", esp_err_to_name(ret));
-    }
+    // ✅ CRITICAL FIX: DO NOT start TTS decoder here!
+    // Starting TTS simultaneously with STT causes WebSocket connection overload (code 1006)
+    // TTS will be started automatically by websocket_client.c when the server enters TTS pipeline stage
+    // This ensures sequential operation: STT upload → Server processing → TTS download
+    ESP_LOGI(TAG, "TTS decoder will start automatically when server begins TTS streaming");
     
     // Add safety delay to allow pipeline initialization
     vTaskDelay(pdMS_TO_TICKS(50));

@@ -125,7 +125,22 @@ async def get_llm_response(session_id: str, transcript: str, image_base64: Optio
     if not groq_client:
         raise RuntimeError("Groq client not initialized. Call init_client() first.")
     
-    # Construct user message with optional image
+    # Add user message to context (store as text for history tracking)
+    manage_context(session_id, "user", transcript)
+    
+    # Retrieve conversation history
+    history = SESSION_CONTEXTS[session_id]["history"]
+    
+    # Construct messages with system prompt
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
+    
+    # Add conversation history, but skip the last user message (we'll add it with image if needed)
+    if len(history) > 1:
+        messages.extend(history[:-1])
+    
+    # Construct the current user message with optional image
     if image_base64:
         # Multimodal message format with text and image
         user_message_content = [
@@ -142,24 +157,8 @@ async def get_llm_response(session_id: str, transcript: str, image_base64: Optio
         ]
         print(f"🖼️ [{session_id}] Including image in LLM context (base64 length: {len(image_base64)})")
     else:
-        # Text-only message
+        # Text-only message - use simple string format
         user_message_content = transcript
-    
-    # Add user message to context (store as text for history tracking)
-    manage_context(session_id, "user", transcript)
-    
-    # Retrieve conversation history
-    history = SESSION_CONTEXTS[session_id]["history"]
-    
-    # Construct messages with system prompt
-    # Replace the last user message with multimodal content if image provided
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
-    
-    # Add history except last message (which we'll replace with multimodal version if needed)
-    if len(history) > 1:
-        messages.extend(history[:-1])
     
     # Add current user message (multimodal or text-only)
     messages.append({
@@ -174,6 +173,13 @@ async def get_llm_response(session_id: str, transcript: str, image_base64: Optio
         "max_tokens": 100,   # Enforce brevity (15-60 words target)
         "top_p": 0.9
     }
+    
+    # Debug logging to verify payload structure
+    if image_base64:
+        print(f"🔍 [{session_id}] Sending multimodal request to Groq API")
+        print(f"   Model: {GROQ_MODEL}")
+        print(f"   Messages count: {len(messages)}")
+        print(f"   Last message has image: {isinstance(messages[-1]['content'], list)}")
     
     try:
         # Make async API call to Groq
