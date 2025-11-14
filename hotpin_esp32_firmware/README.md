@@ -4,8 +4,7 @@
 
 Firmware for ESP32-CAM AI-Thinker module with dynamic switching between camera streaming and voice interaction modes.
 
-**🆕 NEW: Environment-based configuration!** Change server IP and WiFi without editing code.  
-📖 See [QUICK_CONFIG_REFERENCE.md](QUICK_CONFIG_REFERENCE.md) or [CONFIGURATION_GUIDE.md](CONFIGURATION_GUIDE.md)
+**🆕 NEW: Environment-based configuration!** Change server IP and WiFi credentials in `.env` file.
 
 ---
 
