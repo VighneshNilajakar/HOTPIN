@@ -807,7 +807,12 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
             break;
             
         case WEBSOCKET_EVENT_DISCONNECTED:
-            ESP_LOGW(TAG, "⚠️ WebSocket disconnected");
+            // ✅ CRITICAL: Log disconnect details to diagnose connection stability issues
+            ESP_LOGW(TAG, "⚠️ WebSocket disconnected (was_connected=%d, pipeline_stage=%s, session_ready=%d)",
+                     is_connected ? 1 : 0,
+                     websocket_client_pipeline_stage_to_string(g_pipeline_stage),
+                     g_session_ready ? 1 : 0);
+            
             is_connected = false;
             g_pipeline_stage = WEBSOCKET_PIPELINE_STAGE_IDLE;
             g_session_ready = false;
@@ -824,18 +829,10 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base,
                 g_status_callback(WEBSOCKET_STATUS_DISCONNECTED, g_status_callback_arg);
             }
             
-            // CRITICAL FIX: Trigger automatic reconnection after a brief delay
-            // This helps maintain connection without manual intervention
-            // Only create task if it doesn't already exist to prevent multiple attempts
-            if (s_reconnect_task_handle == NULL) {
-                BaseType_t ret = xTaskCreate(websocket_reconnect_task, "ws_reconnect_task", 2048, NULL, TASK_PRIORITY_WEBSOCKET - 1, &s_reconnect_task_handle);
-                if (ret != pdPASS) {
-                    ESP_LOGE(TAG, "Failed to create reconnect task");
-                    s_reconnect_task_handle = NULL;
-                }
-            } else {
-                ESP_LOGD(TAG, "Reconnect task already exists, skipping creation");
-            }
+            // ✅ STABILITY FIX: Don't auto-reconnect - let main connection task handle it
+            // The main connection task in main.c monitors connection and handles reconnects
+            // This prevents race conditions from multiple reconnection attempts
+            ESP_LOGI(TAG, "Main connection task will handle reconnection");
             break;
             
         case WEBSOCKET_EVENT_DATA:

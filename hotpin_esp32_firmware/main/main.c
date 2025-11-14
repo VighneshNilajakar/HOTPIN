@@ -569,11 +569,11 @@ static void websocket_connection_task(void *pvParameters) {
             xEventGroupSetBits(g_network_event_group, NETWORK_EVENT_WEBSOCKET_CONNECTED);
             retry_delay_ms = 5000;
 
-            // ✅ STABILITY FIX: Monitor connection health with shorter intervals
-            // This allows faster detection of transport errors and prevents watchdog starvation
-            int health_checks = 0;
+            // ✅ STABILITY FIX: Monitor connection health with periodic watchdog resets
+            // Let WebSocket ping/pong mechanism handle connection health (ping_interval_sec=10)
+            // Server sends pings every 20s, ESP32 responds automatically
+            // Only reconnect if connection actually fails, not on arbitrary timeout
             const int HEALTH_CHECK_INTERVAL_MS = 1000;  // Check every 1 second
-            const int MAX_HEALTH_CHECKS = 180;  // 3 minutes before forced reconnect (allows time for user to think/speak)
             
             while (websocket_client_is_connected() &&
                    (xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
@@ -595,15 +595,11 @@ static void websocket_connection_task(void *pvParameters) {
                 }
                 
                 vTaskDelay(pdMS_TO_TICKS(HEALTH_CHECK_INTERVAL_MS));
-                health_checks++;
                 
-                // ✅ STABILITY FIX: Force reconnect if connection appears stale
-                // This prevents silent failures where websocket_client_is_connected() returns true
-                // but the underlying transport has errors (e.g., transport_poll_write failures)
-                if (health_checks >= MAX_HEALTH_CHECKS) {
-                    ESP_LOGW(TAG, "⚠️ Connection health check timeout - forcing reconnect to prevent stale connection");
-                    break;  // Exit monitoring loop to trigger reconnection
-                }
+                // ✅ CRITICAL FIX: Removed forced reconnect timeout
+                // WebSocket ping/pong (10s interval) maintains connection health
+                // Connection only breaks on actual failures (TCP errors, server disconnect)
+                // This prevents unnecessary reconnections during long idle periods
             }
 
             // Check for system shutdown state

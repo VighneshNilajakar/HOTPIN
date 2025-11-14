@@ -62,6 +62,29 @@ esp_err_t camera_controller_init(void) {
     // Initialize flash LED
     flash_led_init();
     
+    // ✅ CRITICAL FIX: Power cycle camera sensor before init
+    // After multiple I2S init/deinit cycles, the camera I2C bus can become unresponsive
+    // Solution: Toggle PWDN pin to power cycle the sensor and reset I2C communication
+    if (CONFIG_CAMERA_PIN_PWDN != -1) {
+        gpio_set_direction(CONFIG_CAMERA_PIN_PWDN, GPIO_MODE_OUTPUT);
+        gpio_set_level(CONFIG_CAMERA_PIN_PWDN, 1);  // Power down
+        vTaskDelay(pdMS_TO_TICKS(100));              // Wait 100ms
+        gpio_set_level(CONFIG_CAMERA_PIN_PWDN, 0);  // Power up
+        vTaskDelay(pdMS_TO_TICKS(100));              // Wait for sensor to stabilize
+        ESP_LOGI(TAG, "Camera sensor power cycled via PWDN pin");
+    }
+    
+    // ✅ CRITICAL FIX: Hardware reset to clear I2C/SCCB bus state
+    // This ensures clean communication after GPIO conflicts from I2S usage
+    if (CONFIG_CAMERA_PIN_RESET != -1) {
+        gpio_set_direction(CONFIG_CAMERA_PIN_RESET, GPIO_MODE_OUTPUT);
+        gpio_set_level(CONFIG_CAMERA_PIN_RESET, 0);  // Assert reset
+        vTaskDelay(pdMS_TO_TICKS(50));                // Hold reset for 50ms
+        gpio_set_level(CONFIG_CAMERA_PIN_RESET, 1);  // Release reset
+        vTaskDelay(pdMS_TO_TICKS(100));               // Wait for sensor to boot
+        ESP_LOGI(TAG, "Camera sensor hardware reset completed");
+    }
+    
     // Camera configuration with AI-Thinker pin mapping
     camera_config_t camera_config = {
         .pin_pwdn = CONFIG_CAMERA_PIN_PWDN,
