@@ -330,7 +330,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     session_id = None
     last_activity_time = asyncio.get_event_loop().time()
-    audio_streaming_timeout = 30.0  # 30 seconds max for audio streaming phase
+    audio_streaming_timeout = 180.0  # 3 minutes max for audio streaming phase (allows time for user to think/speak)
     
     try:
         # Accept WebSocket connection

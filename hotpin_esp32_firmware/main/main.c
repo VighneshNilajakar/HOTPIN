@@ -573,7 +573,7 @@ static void websocket_connection_task(void *pvParameters) {
             // This allows faster detection of transport errors and prevents watchdog starvation
             int health_checks = 0;
             const int HEALTH_CHECK_INTERVAL_MS = 1000;  // Check every 1 second
-            const int MAX_HEALTH_CHECKS = 30;  // 30 seconds before forced reconnect
+            const int MAX_HEALTH_CHECKS = 180;  // 3 minutes before forced reconnect (allows time for user to think/speak)
             
             while (websocket_client_is_connected() &&
                    (xEventGroupGetBits(g_network_event_group) & NETWORK_EVENT_WIFI_CONNECTED) != 0) {
