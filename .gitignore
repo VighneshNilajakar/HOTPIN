@@ -36,6 +36,7 @@ model/
 
 # Temporary TTS files
 hotpin_tts_*.wav
+captured_images/
 
 # IDE
 .vscode/
