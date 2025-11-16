@@ -28,13 +28,17 @@
 #define FEEDBACK_DEFAULT_VOLUME        0.60f
 #define FEEDBACK_LOW_VOLUME            0.45f
 
-#define NOTE_C4   261.63f
-#define NOTE_E4   329.63f
-#define NOTE_G4   392.00f
-#define NOTE_G5   783.99f
-#define NOTE_E5   659.26f
-#define NOTE_C3   130.81f
-#define NOTE_DS3  155.56f
+// Nokia Tune notes (based on Francisco Tárrega's Gran Vals)
+#define NOTE_E5   659.26f  // Mi
+#define NOTE_D5   587.33f  // Re
+#define NOTE_FS4  369.99f  // Fa#
+#define NOTE_GS4  415.30f  // Sol#
+#define NOTE_CS5  554.37f  // Do#
+#define NOTE_B4   493.88f  // Si
+#define NOTE_D4   293.66f  // Re
+#define NOTE_E4   329.63f  // Mi
+#define NOTE_A4   440.00f  // La (for variations)
+#define NOTE_C4   261.63f  // Do (for error tones)
 
 typedef struct {
     bool is_noise;
@@ -49,57 +53,71 @@ static SemaphoreHandle_t s_play_mutex = NULL;
 static bool s_initialized = false;
 static int16_t s_work_buffer[FEEDBACK_MAX_SEGMENT_SAMPLES] DRAM_ATTR __attribute__((aligned(16)));
 
+// Phase continuity for smooth transitions
+static float s_phase_a = 0.0f;
+static float s_phase_b = 0.0f;
+
+// Envelope constants for fade-in/fade-out (reduces clicks)
+#define ENVELOPE_FADE_MS 5
+#define ENVELOPE_FADE_SAMPLES ((FEEDBACK_SAMPLE_RATE * ENVELOPE_FADE_MS) / 1000)
+
 static esp_err_t ensure_initialized(void);
 static esp_err_t play_segments(const tone_segment_t *segments, size_t count);
 
 // Provided by main.c to coordinate audio/camera reconfiguration
 extern SemaphoreHandle_t g_i2s_config_mutex;
 
+// Classic Nokia startup (first 4 notes of Gran Vals)
 static const tone_segment_t BOOT_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 180, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,  .secondary_freq_hz = 0.0f, .duration_ms = 40,  .amplitude = 0.0f},
-    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 180, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,  .secondary_freq_hz = 0.0f, .duration_ms = 40,  .amplitude = 0.0f},
-    {.is_noise = false, .primary_freq_hz = NOTE_G4, .secondary_freq_hz = 0.0f, .duration_ms = 220, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E5, .secondary_freq_hz = 0.0f, .duration_ms = 125, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_D5, .secondary_freq_hz = 0.0f, .duration_ms = 125, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_FS4, .secondary_freq_hz = 0.0f, .duration_ms = 250, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_GS4, .secondary_freq_hz = 0.0f, .duration_ms = 250, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
+// Shutdown: reverse of Nokia tune (descending)
 static const tone_segment_t SHUTDOWN_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_G4, .secondary_freq_hz = 0.0f, .duration_ms = 200, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 200, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 240, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_GS4, .secondary_freq_hz = 0.0f, .duration_ms = 200, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_FS4, .secondary_freq_hz = 0.0f, .duration_ms = 200, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_D5, .secondary_freq_hz = 0.0f, .duration_ms = 150, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E5, .secondary_freq_hz = 0.0f, .duration_ms = 300, .amplitude = FEEDBACK_LOW_VOLUME},
 };
 
+// Error: two descending notes (D5-C4) - Nokia-style alert
 static const tone_segment_t ERROR_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_C3, .secondary_freq_hz = NOTE_DS3, .duration_ms = 520, .amplitude = FEEDBACK_LOW_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f,   .duration_ms = 120, .amplitude = 0.0f},
+    {.is_noise = false, .primary_freq_hz = NOTE_D5, .secondary_freq_hz = 0.0f, .duration_ms = 200, .amplitude = FEEDBACK_LOW_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 400, .amplitude = FEEDBACK_LOW_VOLUME},
 };
 
+// Recording start: quick ascending (E4-A4) - Nokia notification style
 static const tone_segment_t REC_START_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_G5, .secondary_freq_hz = NOTE_E5, .duration_ms = 120, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 80, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_A4, .secondary_freq_hz = 0.0f, .duration_ms = 120, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
+// Recording stop: quick descending (A4-E4) - Nokia confirmation
 static const tone_segment_t REC_STOP_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 110, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_A4, .secondary_freq_hz = 0.0f, .duration_ms = 80, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 120, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
+// Camera capture: short shutter sound (white noise is appropriate for camera click)
 static const tone_segment_t CAPTURE_SEQUENCE[] = {
-    {.is_noise = true, .primary_freq_hz = 0.0f, .secondary_freq_hz = 0.0f, .duration_ms = 160, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = true, .primary_freq_hz = 0.0f, .secondary_freq_hz = 0.0f, .duration_ms = 90, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
-// Double beep: "Processing, please wait"
+// Processing: Nokia tune fragment (E5-D5) - "working..."
 static const tone_segment_t PROCESSING_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 80,  .amplitude = 0.0f},
-    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E5, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_D5, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
-// Triple ascending beep: "Response complete, ready for next input"
+// TTS complete: Full Nokia tune (second half: C#5-B4-D4-E4) - "ready!"
 static const tone_segment_t TTS_COMPLETE_SEQUENCE[] = {
-    {.is_noise = false, .primary_freq_hz = NOTE_C4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 60,  .amplitude = 0.0f},
-    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 100, .amplitude = FEEDBACK_DEFAULT_VOLUME},
-    {.is_noise = false, .primary_freq_hz = 0.0f,   .secondary_freq_hz = 0.0f, .duration_ms = 60,  .amplitude = 0.0f},
-    {.is_noise = false, .primary_freq_hz = NOTE_G4, .secondary_freq_hz = 0.0f, .duration_ms = 140, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_CS5, .secondary_freq_hz = 0.0f, .duration_ms = 125, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_B4, .secondary_freq_hz = 0.0f, .duration_ms = 125, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_D4, .secondary_freq_hz = 0.0f, .duration_ms = 250, .amplitude = FEEDBACK_DEFAULT_VOLUME},
+    {.is_noise = false, .primary_freq_hz = NOTE_E4, .secondary_freq_hz = 0.0f, .duration_ms = 250, .amplitude = FEEDBACK_DEFAULT_VOLUME},
 };
 
 esp_err_t feedback_player_init(void) {
@@ -271,29 +289,57 @@ static void generate_noise_samples(size_t frame_count, float amplitude) {
 }
 
 static void generate_tone_samples(size_t frame_count, float freq_a, float freq_b, float amplitude) {
-    float phase_a = 0.0f;
-    float phase_b = 0.0f;
     const float omega_a = (freq_a > 0.0f) ? (2.0f * (float)M_PI * freq_a / (float)FEEDBACK_SAMPLE_RATE) : 0.0f;
     const float omega_b = (freq_b > 0.0f) ? (2.0f * (float)M_PI * freq_b / (float)FEEDBACK_SAMPLE_RATE) : 0.0f;
+    const bool has_dual = (omega_a > 0.0f && omega_b > 0.0f);
+    const float mix_scale = has_dual ? 0.5f : 1.0f;  // Prevent clipping with dual tones
     size_t idx = 0;
+
+    // Calculate fade envelope samples
+    size_t fade_samples = (frame_count < ENVELOPE_FADE_SAMPLES * 2) ? (frame_count / 4) : ENVELOPE_FADE_SAMPLES;
 
     for (size_t i = 0; i < frame_count; ++i) {
         float sample = 0.0f;
+        
+        // Generate tones with proper mixing
         if (omega_a > 0.0f) {
-            sample += sinf(phase_a);
-            phase_a += omega_a;
+            sample += sinf(s_phase_a);
+            s_phase_a += omega_a;
+            // Keep phase in range to prevent float precision issues
+            if (s_phase_a > (2.0f * (float)M_PI)) {
+                s_phase_a -= (2.0f * (float)M_PI);
+            }
         }
         if (omega_b > 0.0f) {
-            sample += 0.6f * sinf(phase_b);
-            phase_b += omega_b;
+            sample += sinf(s_phase_b);
+            s_phase_b += omega_b;
+            if (s_phase_b > (2.0f * (float)M_PI)) {
+                s_phase_b -= (2.0f * (float)M_PI);
+            }
         }
-        int16_t rendered = float_to_sample(sample * amplitude);
+
+        // Apply envelope for smooth fade-in/fade-out
+        float envelope = 1.0f;
+        if (i < fade_samples) {
+            envelope = (float)i / (float)fade_samples;  // Fade-in
+        } else if (i >= frame_count - fade_samples) {
+            envelope = (float)(frame_count - i) / (float)fade_samples;  // Fade-out
+        }
+
+        // Mix and scale properly
+        sample = sample * mix_scale * amplitude * envelope;
+        
+        int16_t rendered = float_to_sample(sample);
         s_work_buffer[idx++] = rendered;
         s_work_buffer[idx++] = rendered;
     }
 }
 
 static esp_err_t play_segments(const tone_segment_t *segments, size_t count) {
+    // Reset phase for new sound sequence (maintains continuity within sequence)
+    s_phase_a = 0.0f;
+    s_phase_b = 0.0f;
+
     for (size_t i = 0; i < count; ++i) {
         const tone_segment_t *segment = &segments[i];
         if (segment->duration_ms == 0U) {

@@ -930,12 +930,7 @@ static void handle_text_message(const char *data, size_t len) {
                 const char *message_str = message->valuestring;
                 if (message_str != NULL && strstr(message_str, "Could not understand audio") != NULL) {
                     ESP_LOGW(TAG, "Received empty transcription error: %s", message_str);
-                    
-                    // Play audio feedback to indicate the empty transcription to the user
-                    esp_err_t feedback_ret = audio_feedback_beep_triple(false); // Using triple beep for error feedback
-                    if (feedback_ret != ESP_OK) {
-                        ESP_LOGE(TAG, "Failed to play audio feedback for empty transcription: %s", esp_err_to_name(feedback_ret));
-                    }
+                    // Removed redundant error beep - state_manager already plays FEEDBACK_SOUND_ERROR
                 }
             }
         }

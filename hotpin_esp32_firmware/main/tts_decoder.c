@@ -13,6 +13,7 @@
 #include "config.h"
 #include "audio_driver.h"
 #include "audio_feedback.h"
+#include "feedback_player.h"
 #include "websocket_client.h"
 #include "event_dispatcher.h"
 #include "system_events.h"
@@ -713,15 +714,8 @@ static void tts_playback_task(void *pvParameters) {
                     header_parsed = true;
                     print_wav_info(&wav_info);
 
-                    if (!playback_feedback_sent) {
-                        esp_err_t fb_ret = audio_feedback_beep_single(false);
-                        if (fb_ret != ESP_OK) {
-                            ESP_LOGW(TAG, "Playback start feedback failed: %s", esp_err_to_name(fb_ret));
-                        } else {
-                            ESP_LOGI(TAG, "🔔 Playback start feedback dispatched (bytes_received=%zu)", bytes_received);
-                        }
-                        playback_feedback_sent = true;
-                    }
+                    // Removed redundant playback start beep - not needed during TTS streaming
+                    playback_feedback_sent = true;
 
                     esp_err_t clk_ret = audio_driver_set_tx_sample_rate(wav_info.sample_rate);
                     if (clk_ret != ESP_OK) {
@@ -797,15 +791,8 @@ static void tts_playback_task(void *pvParameters) {
                 }
             } else {
                 // Header already parsed - play PCM data directly from dma_buffer
-                if (!playback_feedback_sent) {
-                    esp_err_t fb_ret = audio_feedback_beep_single(false);
-                    if (fb_ret != ESP_OK) {
-                        ESP_LOGW(TAG, "Delayed playback feedback failed: %s", esp_err_to_name(fb_ret));
-                    } else {
-                        ESP_LOGI(TAG, "🔔 Playback start feedback dispatched (late)");
-                    }
-                    playback_feedback_sent = true;
-                }
+                // Removed redundant delayed playback beep - not needed
+                playback_feedback_sent = true;
 
                 size_t accounted = 0;
                 esp_err_t ret = write_pcm_chunk_to_driver(dma_buffer, bytes_received_from_stream, &accounted);
@@ -967,8 +954,8 @@ static void tts_playback_task(void *pvParameters) {
     // Play completion feedback if playback was successful (played significant audio)
     // This signals to user that response is complete and they can provide next input
     if (playback_result == ESP_OK && pcm_bytes_played > 10000) {  // > 10KB indicates real content played
-        ESP_LOGI(TAG, "Playing TTS completion feedback to signal readiness for next input");
-        esp_err_t fb_ret = audio_feedback_beep_triple(false);  // Triple beep: "Ready for next input"
+        ESP_LOGI(TAG, "Playing Nokia-themed TTS completion feedback to signal readiness");
+        esp_err_t fb_ret = feedback_player_play(FEEDBACK_SOUND_TTS_COMPLETE);
         if (fb_ret != ESP_OK) {
             ESP_LOGW(TAG, "TTS completion feedback failed: %s", esp_err_to_name(fb_ret));
         }
